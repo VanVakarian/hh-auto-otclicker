@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+  <title>HH Auto Otclicker</title>
+  <link rel="stylesheet"
+        href="sidepanel.css">
+</head>
+
+<body class="sidepanel-container">
+  <header class="masthead">
+    <span class="masthead-badge">HH</span>
+    <span class="masthead-title">Auto Otclicker</span>
+  </header>
+
+  <nav class="tabs">
+    <button type="button"
+            class="tab-btn active"
+            data-tab="run">Запуск</button>
+    <button type="button"
+            class="tab-btn"
+            data-tab="analytics">Аналитика</button>
+    <button type="button"
+            class="tab-btn"
+            data-tab="settings">Настройки</button>
+  </nav>
+
+  <section id="tab-run"
+           class="tab-panel active">
+    <div class="card status-card">
+      <div class="status-row">
+        <span class="status-dot"
+              id="statusDot"></span>
+        <span class="status-text"
+              id="statusText">Ожидание</span>
+      </div>
+      <div class="status-error"
+           id="statusError"
+           hidden></div>
+    </div>
+
+    <div class="card">
+      <div class="mode-switch">
+        <button type="button"
+                id="modeAutoBtn"
+                class="mode-btn">Полный авто</button>
+        <button type="button"
+                id="modeAssistedBtn"
+                class="mode-btn">Ассистент</button>
+      </div>
+      <div class="hint"
+           id="modeHint"></div>
+    </div>
+
+    <div class="card approval-card"
+         id="approvalCard"
+         hidden>
+      <h2 class="card-title">Анкета заполнена — проверьте на странице</h2>
+      <div class="current-vacancy"
+           id="approvalVacancy"></div>
+      <div class="button-row">
+        <button type="button"
+                id="approveSubmitBtn"
+                class="submit-btn">Отправить</button>
+        <button type="button"
+                id="approveSkipBtn"
+                class="submit-btn submit-btn_secondary">Пропустить</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="counter-row">
+        <span class="counter-label">Откликов сегодня</span>
+        <span class="counter-value"
+              id="dailyCounter">0 / 200</span>
+      </div>
+      <div class="current-vacancy"
+           id="currentVacancy"
+           hidden></div>
+      <div class="button-row">
+        <button type="button"
+                id="startBtn"
+                class="submit-btn">Старт</button>
+        <button type="button"
+                id="stopBtn"
+                class="submit-btn submit-btn_secondary"
+                hidden>Стоп</button>
+      </div>
+      <div class="hint"
+           id="startHint"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Последние события</h2>
+      <ul class="event-feed"
+          id="eventFeed"></ul>
+    </div>
+
+    <button type="button"
+            id="downloadDiagnosticsBtn"
+            class="link-btn">Скачать диагностику</button>
+  </section>
+
+  <section id="tab-analytics"
+           class="tab-panel">
+    <div class="card">
+      <div class="stats-grid" id="statsGrid"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">Отклики за 7 дней</h2>
+      <div class="bar-chart"
+           id="barChart"></div>
+    </div>
+
+    <div class="card">
+      <h2 class="card-title">История откликов</h2>
+      <div class="log-table-wrap">
+        <table class="log-table"
+               id="logTable">
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="counter-row">
+        <span class="counter-label">Заполненные анкеты</span>
+        <span class="counter-value"
+              id="answersLogCount">0</span>
+      </div>
+      <div class="hint">Вопросы, сгенерированные ответы и что реально было выбрано — по каждой анкете, с компанией и ссылкой на вакансию, чтобы найти перед собеседованием.</div>
+      <button type="button"
+              id="downloadAnswersBtn"
+              class="submit-btn submit-btn_secondary">Скачать анкеты</button>
+    </div>
+  </section>
+
+  <section id="tab-settings"
+           class="tab-panel">
+    <div class="card">
+      <div class="form-group form-group_toggle">
+        <label class="form-label"
+               for="llmEnabled">Заполнять анкеты через LLM</label>
+        <input type="checkbox"
+               id="llmEnabled">
+      </div>
+
+      <div class="form-group">
+        <label for="apiKey"
+               class="form-label">API-ключ (OpenRouter)</label>
+        <input type="password"
+               id="apiKey"
+               class="form-input"
+               placeholder="Введите API-ключ">
+      </div>
+
+      <div class="form-group">
+        <label for="legend"
+               class="form-label">Легенда</label>
+        <textarea id="legend"
+                  class="form-textarea"
+                  rows="4"
+                  placeholder="Справочная информация о вас"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="stylePrompt"
+               class="form-label">Стиль ответов</label>
+        <textarea id="stylePrompt"
+                  class="form-textarea"
+                  rows="3"
+                  placeholder="Например: отвечай кратко и по делу"></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="llmModels"
+               class="form-label">Модели LLM (по одной на строку, необязательно)</label>
+        <textarea id="llmModels"
+                  class="form-textarea"
+                  rows="4"
+                  placeholder="Пусто — используются модели по умолчанию.&#10;Например:&#10;qwen/qwen3-coder&#10;deepseek/deepseek-chat-v3.1"></textarea>
+        <div class="hint">Пробуются по очереди сверху вниз, пока одна не вернёт валидный ответ.</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group">
+        <label for="dailyLimit"
+               class="form-label">Дневной лимит откликов</label>
+        <input type="number"
+               id="dailyLimit"
+               class="form-input"
+               min="1"
+               max="1000">
+      </div>
+
+      <div class="form-group form-group_pair">
+        <div>
+          <label for="delayMinSec"
+                 class="form-label">Пауза мин, сек</label>
+          <input type="number"
+                 id="delayMinSec"
+                 class="form-input"
+                 min="0">
+        </div>
+        <div>
+          <label for="delayMaxSec"
+                 class="form-label">Пауза макс, сек</label>
+          <input type="number"
+                 id="delayMaxSec"
+                 class="form-input"
+                 min="0">
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group form-group_toggle">
+        <label class="form-label"
+               for="coverLetterEnabled">Прикладывать сопроводительное письмо</label>
+        <input type="checkbox"
+               id="coverLetterEnabled">
+      </div>
+      <div class="form-group">
+        <textarea id="coverLetterText"
+                  class="form-textarea"
+                  rows="5"
+                  placeholder="Текст сопроводительного письма"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group">
+        <label for="blacklistCompanies"
+               class="form-label">Компании, которые пропускаем (по одной на строку)</label>
+        <textarea id="blacklistCompanies"
+                  class="form-textarea"
+                  rows="5"
+                  placeholder="Например:&#10;Рога и Копыта&#10;ООО Пример"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="counter-row">
+        <span class="counter-label">Анкетный чёрный список</span>
+        <span class="counter-value"
+              id="questionnaireBlacklistCount">0</span>
+      </div>
+      <button type="button"
+              id="resetBlacklistBtn"
+              class="submit-btn submit-btn_secondary">Сбросить</button>
+    </div>
+  </section>
+
+  <script type="module"
+          src="sidepanel/main.js"></script>
+</body>
+
+</html>

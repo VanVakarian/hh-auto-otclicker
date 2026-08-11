@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "HH Auto Otclicker",
+  "version": "1.0.0",
+  "description": "Расширение для автоматических откликов на вакансии на HH.",
+  "permissions": [
+    "storage",
+    "tabs",
+    "sidePanel",
+    "scripting",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://hh.ru/*",
+    "https://openrouter.ai/*"
+  ],
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "action": {
+    "default_icon": "icon.png",
+    "default_title": "HH Auto Otclicker"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  }
+}
