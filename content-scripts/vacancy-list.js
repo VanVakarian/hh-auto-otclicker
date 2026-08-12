@@ -26,6 +26,10 @@
   // employer — no cover letter fixes that, it's a resume-settings issue, not a missing-letter one
   const RESUME_VISIBILITY_TEXT = 'видимость резюме';
 
+  // hh.ru shows this confirmation (its own separate dialog, not the response popup's modal-overlay)
+  // when the vacancy's country differs from the resume's — it blocks the response until confirmed
+  const RELOCATION_WARNING_CONFIRM_SELECTOR = '[data-qa="relocation-warning-confirm"]';
+
   const CHAT_WIDGET_CLOSE_SELECTOR = '[data-qa="chatik-close-chatik"]';
 
   // hh.ru's global chat widget can pop open on its own (e.g. an employer's auto-message that
@@ -274,17 +278,31 @@
 
   async function waitForClickOutcome(vacancyId, { timeout = 6000, interval = 200 } = {}) {
     const start = Date.now();
+    let relocationWarningConfirmed = false;
+
     while (Date.now() - start < timeout) {
       if (location.pathname.startsWith('/applicant/vacancy_response')) return 'navigated';
       if (document.querySelector(MODAL_OVERLAY_SELECTOR)) return 'modal';
-      // some vacancies redirect to their own /vacancy/<id> page instead of the questionnaire or a
-      // modal — that page has no injected script (background.js only matches the list and the
-      // questionnaire), so the run would silently die there unless caught here
-      if (!location.pathname.startsWith('/search/vacancy')) return 'navigated_away';
-      if (!isStillRespondable(vacancyId)) return 'instant';
+
+      // "you're responding to a vacancy in another country" — a separate confirm dialog that blocks
+      // everything else (navigation, the response popup) until "Все равно откликнуться" is clicked
+      if (!relocationWarningConfirmed) {
+        const relocationConfirm = document.querySelector(RELOCATION_WARNING_CONFIRM_SELECTOR);
+        if (relocationConfirm) {
+          relocationWarningConfirmed = true;
+          await trace('relocation warning shown, confirming', `vacancyId=${vacancyId}`);
+          relocationConfirm.click();
+        }
+      }
+
+      // some vacancies redirect (SPA pushState, same script instance survives) to their own
+      // /vacancy/<id> page and show the response popup there instead of on the list — the URL flips
+      // before the popup renders, so leaving the list can't be treated as a dead end right away; keep
+      // polling for the popup until the outer timeout, same as if we'd never left the list
+      if (location.pathname.startsWith('/search/vacancy') && !isStillRespondable(vacancyId)) return 'instant';
       await sleep(interval);
     }
-    return 'unknown';
+    return location.pathname.startsWith('/search/vacancy') ? 'unknown' : 'navigated_away';
   }
 
   async function skipModalResponse(card, reason) {
@@ -308,7 +326,7 @@
 
   // hh.ru shows this popup in place (no navigation) when a vacancy needs at most a cover letter,
   // no screening questions — full questionnaires still use the dedicated page.
-  async function handleResponseModal(card, listUrl) {
+  async function handleResponseModal(card) {
     const overlay = document.querySelector(MODAL_OVERLAY_SELECTOR);
     const closeButton = overlay?.querySelector(MODAL_CLOSE_SELECTOR);
     const submitButton = overlay?.querySelector(MODAL_SUBMIT_SELECTOR);
@@ -402,13 +420,9 @@
       return;
     }
 
-    // the overlay disappearing isn't proof the popup closed normally — a full navigation away
-    // from the list (e.g. to the vacancy's own /vacancy/<id> page) also removes it from the DOM
-    if (!location.pathname.startsWith('/search/vacancy')) {
-      await recoverFromStrayNavigation(card, listUrl, 'response popup submit');
-      return;
-    }
-
+    // the popup closing right after our own submit click is proof enough on its own — whether we're
+    // still on the list or ended up on the vacancy's own /vacancy/<id> page (hh.ru shows this same
+    // popup there too), the response went through; the caller returns to listUrl either way
     await markProcessed(card.vacancyId);
     await clearPendingVacancy();
     await addResponseLogEntry({
@@ -514,8 +528,16 @@
     }
 
     if (outcome === 'modal') {
-      await handleResponseModal(card, listUrl);
-      await processNextCard();
+      await handleResponseModal(card);
+      // the popup can show up on the vacancy's own /vacancy/<id> page instead of the list (see
+      // waitForClickOutcome) — head back to the list ourselves instead of falling into
+      // processNextCard's off-list recovery path, which is meant for genuine anomalies
+      if (location.pathname.startsWith('/search/vacancy')) {
+        await processNextCard();
+      } else {
+        await trace('response popup handled off the list, returning', `vacancyId=${card.vacancyId}`);
+        location.replace(listUrl);
+      }
       return;
     }
 

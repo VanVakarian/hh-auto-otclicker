@@ -37,6 +37,14 @@ export async function initSettingsView() {
     });
   });
 
+  const llmEnabledEl = document.getElementById('llmEnabled');
+  const apiKeyEl = document.getElementById('apiKey');
+  const syncLlmEnabledAvailability = () => {
+    llmEnabledEl.disabled = !apiKeyEl.value.trim();
+  };
+  apiKeyEl.addEventListener('input', syncLlmEnabledAvailability);
+  syncLlmEnabledAvailability();
+
   document.getElementById('resetBlacklistBtn').addEventListener('click', async () => {
     await clearQuestionnaireBlacklist();
     await renderBlacklistCount();
