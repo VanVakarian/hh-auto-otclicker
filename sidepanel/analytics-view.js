@@ -27,13 +27,15 @@ function computeStats(log) {
       if (entry.result === 'success_instant') stats.instant += 1;
       if (entry.result === 'success_popup') stats.popup += 1;
       if (entry.result === 'success_questionnaire') stats.questionnaire += 1;
-    } else if (entry.result === 'skipped_company') {
+    } else if (entry.result === 'skipped_company' || entry.result === 'skipped_title_stop_word') {
       stats.skippedCompany += 1;
     } else if (
       entry.result === 'skipped_questionnaire_no_llm' ||
       entry.result === 'skipped_questionnaire_llm_failed' ||
       entry.result === 'skipped_popup' ||
-      entry.result === 'skipped_assisted'
+      entry.result === 'skipped_assisted' ||
+      entry.result === 'skipped_stop_word' ||
+      entry.result === 'skipped_manual'
     ) {
       stats.skippedQuestionnaire += 1;
     } else if (entry.result === 'error') {

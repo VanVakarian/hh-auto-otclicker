@@ -75,7 +75,7 @@
       <div class="counter-row">
         <span class="counter-label">Откликов сегодня</span>
         <span class="counter-value"
-              id="dailyCounter">0 / 200</span>
+              id="dailyCounter">0</span>
       </div>
       <div class="current-vacancy"
            id="currentVacancy"
@@ -241,6 +241,29 @@
                   class="form-textarea"
                   rows="5"
                   placeholder="Например:&#10;Рога и Копыта&#10;ООО Пример"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group">
+        <label for="skipStopWords"
+               class="form-label">Стоп-слова в анкете — пропускаем без отклика (по одному на строку)</label>
+        <textarea id="skipStopWords"
+                  class="form-textarea"
+                  rows="5"
+                  placeholder="Например:&#10;тестовое задание&#10;задание:"></textarea>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group">
+        <label for="vacancyTitleStopWords"
+               class="form-label">Стоп-слова в названии вакансии — пропускаем (все слова строки должны быть в
+          названии, по группе на строку)</label>
+        <textarea id="vacancyTitleStopWords"
+                  class="form-textarea"
+                  rows="5"
+                  placeholder="Например:&#10;стажер&#10;водитель курьер"></textarea>
       </div>
     </div>
 

@@ -11,12 +11,15 @@
   const ANSWERS_LOG_KEY = 'hhaa_answersLog';
 
   const TASK_BODY_SELECTOR = '[data-qa="task-body"]';
+  const TEST_DESCRIPTION_SELECTOR = '[data-qa="test-description"]';
   const QUESTION_SELECTOR = '[data-qa="task-question"]';
   const CHOICE_INPUT_SELECTOR = 'input[type="radio"], input[type="checkbox"]';
   const CELL_SELECTOR = 'label[data-qa="cell"]';
   const CELL_TEXT_SELECTOR = '[data-qa="cell-text-content"]';
-  const LETTER_TOGGLE_SELECTOR = '[data-qa="vacancy-response-letter-toggle"]';
+  const LETTER_TEXTAREA_SELECTOR = '[data-qa="vacancy-response-popup-form-letter-input"]';
   const SUBMIT_SELECTOR = '[data-qa="vacancy-response-submit-popup"]';
+  const SKIP_BUTTON_ID = 'hhaa-skip-vacancy-btn';
+  const FILL_BAR_ID = 'hhaa-manual-fill-bar';
   const OPEN_OPTION_VALUE = 'open';
 
   const CHAT_WIDGET_CLOSE_SELECTOR = '[data-qa="chatik-close-chatik"]';
@@ -31,6 +34,35 @@
       const runState = await getRunState();
       if (runState.status !== 'running') return;
       closeButton.click();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
+  const RESPONSE_ERROR_NOTIFICATION_SELECTOR = '[data-qa="vacancy-response-error-notification"]';
+  const DAILY_LIMIT_TEXT_HINT = 'не более 200 откликов';
+
+  // hh.ru enforces its own 200-responses/24h cap server-side and shows this snackbar instead of
+  // letting the response through — nothing left to try, so stop the run rather than keep clicking
+  // into a wall (and burning through delay/retry cycles for nothing)
+  function watchForDailyLimitNotification() {
+    let triggered = false;
+    const observer = new MutationObserver(async () => {
+      if (triggered) return;
+      const notification = document.querySelector(RESPONSE_ERROR_NOTIFICATION_SELECTOR);
+      if (!notification?.textContent?.includes(DAILY_LIMIT_TEXT_HINT)) return;
+
+      const runState = await getRunState();
+      if (runState.status !== 'running') return;
+
+      triggered = true;
+      console.warn('📝 [questionnaire] hh.ru daily response limit reached, stopping run');
+      await addDiagnosticLogEntry({
+        at: Date.now(),
+        level: 'warn',
+        module: 'questionnaire',
+        message: 'hh.ru daily response limit (200/24h) reached, run stopped automatically',
+      });
+      await saveRunState({ status: 'stopped' });
     });
     observer.observe(document.body, { childList: true, subtree: true });
   }
@@ -63,6 +95,21 @@
   async function getSettings() {
     const r = await chrome.storage.local.get(SETTINGS_KEY);
     return r[SETTINGS_KEY] || {};
+  }
+
+  function normalizeStopWords(raw) {
+    return (raw || '')
+      .split('\n')
+      .map((line) => line.trim().toLowerCase())
+      .filter(Boolean);
+  }
+
+  // substring match against the questionnaire's own text — a stop word like "тестовое задание"
+  // or "задание:" catches the phrasing hh.ru employers use to hand out an actual external task,
+  // which the LLM would otherwise happily "answer" by hallucinating a plausible-looking link
+  function matchStopWord(text, stopWords) {
+    const normalized = (text || '').toLowerCase();
+    return stopWords.find((word) => normalized.includes(word)) || null;
   }
 
   async function getRunState() {
@@ -260,23 +307,51 @@
     return null;
   }
 
+  // shared by the automatic pipeline (run()) and the manual "заполнить ответы" button — asks the
+  // LLM for answers to every extracted block, using exactly the same request shape either way
+  function requestLLMAnswers(blocks, settings) {
+    return chrome.runtime.sendMessage({
+      type: 'HHAA_GENERATE_ANSWERS',
+      payload: {
+        apiKey: settings.apiKey,
+        legend: settings.legend,
+        userPrompt: settings.stylePrompt,
+        questions: blocks.map(formatQuestionForLLM),
+        modelsRaw: settings.llmModelsRaw,
+      },
+    });
+  }
+
+  // fills each block with its LLM answer and returns what was actually clicked/typed — same
+  // filling logic for both the automatic pipeline and the manual button
+  async function fillBlocksWithAnswers(blocks, answers) {
+    const answerRecords = [];
+    for (let i = 0; i < blocks.length; i += 1) {
+      const block = blocks[i];
+      const llmAnswer = answers[i];
+      if (block.type === 'text') {
+        fillNativeTextarea(block.textarea, llmAnswer);
+        answerRecords.push({ question: block.questionText, type: 'text', llmAnswer, selected: llmAnswer });
+      } else {
+        const selected = await fillChoiceAnswer(block, llmAnswer);
+        answerRecords.push({ question: block.questionText, type: block.inputType, llmAnswer, selected });
+      }
+    }
+    return answerRecords;
+  }
+
   async function fillCoverLetter(letterText) {
-    const toggle = document.querySelector(LETTER_TOGGLE_SELECTOR);
-    if (!toggle) {
-      await trace('cover letter toggle not found on page', `selector=${LETTER_TOGGLE_SELECTOR}`);
+    const textarea = await waitFor(() => {
+      const el = document.querySelector(LETTER_TEXTAREA_SELECTOR);
+      return isVisible(el) ? el : null;
+    });
+
+    if (!textarea) {
+      await trace('cover letter textarea not found on page', `selector=${LETTER_TEXTAREA_SELECTOR}`);
       return;
     }
 
-    const textareasBefore = new Set(document.querySelectorAll('textarea'));
-    toggle.click();
-
-    // the letter textarea's exact markup isn't confirmed from the captured snapshot, so detect it by diffing
-    const newTextarea = await waitFor(() => {
-      const found = Array.from(document.querySelectorAll('textarea')).find((el) => !textareasBefore.has(el));
-      return found && isVisible(found) ? found : null;
-    });
-
-    if (newTextarea) fillNativeTextarea(newTextarea, letterText);
+    fillNativeTextarea(textarea, letterText);
   }
 
   // assisted mode: the questionnaire is already filled, waiting for the human to review/edit it on
@@ -326,6 +401,8 @@
     llm_disabled: 'skipped_questionnaire_no_llm',
     llm_failed: 'skipped_questionnaire_llm_failed',
     assisted_skipped: 'skipped_assisted',
+    stop_word: 'skipped_stop_word',
+    manual_skip: 'skipped_manual',
   };
 
   async function skipQuestionnaire({ vacancyId, title, company, listUrl, reason }) {
@@ -339,6 +416,108 @@
     });
     console.log(`📝 [questionnaire] skipping "${title}" (${reason})`);
     await finishAndReturn({ vacancyId, listUrl });
+  }
+
+  // manual escape hatch, independent of run()'s own state machine: a real navigation
+  // (finishAndReturn -> location.replace) kills this document's JS context outright, so whatever
+  // run() was doing (mid-LLM-call, waiting on approval, whatever) simply stops existing — no
+  // coordination with run() needed beyond that
+  function injectSkipButton({ vacancyId, title, company, listUrl }) {
+    if (document.getElementById(SKIP_BUTTON_ID)) return;
+    const submitButton = document.querySelector(SUBMIT_SELECTOR);
+    if (!submitButton?.parentElement) return;
+
+    const skipButton = document.createElement('button');
+    skipButton.id = SKIP_BUTTON_ID;
+    skipButton.type = 'button';
+    skipButton.textContent = 'Автооткликер: пропустить вакансию';
+    skipButton.style.cssText =
+      'margin-left:12px;padding:12px 20px;background:#dc2626;color:#fff;border:none;' +
+      'border-radius:8px;font-size:14px;font-weight:500;cursor:pointer;';
+    skipButton.addEventListener('click', () => {
+      skipButton.disabled = true;
+      skipButton.textContent = 'Пропускаем…';
+      skipQuestionnaire({ vacancyId, title, company, listUrl, reason: 'manual_skip' });
+    });
+
+    submitButton.parentElement.appendChild(skipButton);
+  }
+
+  async function setupManualSkipButton() {
+    const runState = await getRunState();
+    if (runState.status !== 'running' || !runState.pendingVacancy) return;
+
+    const settings = await getSettings();
+    if (settings.mode !== 'assisted') return;
+
+    const { vacancyId, title, company } = runState.pendingVacancy;
+
+    await waitFor(() => document.querySelector(SUBMIT_SELECTOR));
+    injectSkipButton({ vacancyId, title, company, listUrl: runState.listUrl });
+  }
+
+  // manual mode: the human opened this questionnaire themselves (bot not running) — offer the
+  // same LLM fill as the automatic pipeline via a button, leaving the actual review/submit to them
+  async function handleManualFillClick(button, bar) {
+    const blocks = extractQuestionBlocks();
+    if (blocks.length === 0) {
+      button.textContent = 'Вопросы не найдены';
+      return;
+    }
+
+    const settings = await getSettings();
+    if (!(settings.llmEnabled && settings.apiKey && settings.apiKey.trim())) {
+      button.textContent = 'LLM выключен или не задан ключ — см. настройки';
+      return;
+    }
+
+    button.disabled = true;
+    button.textContent = 'Заполняем…';
+
+    const response = await requestLLMAnswers(blocks, settings);
+    if (!response?.success) {
+      button.disabled = false;
+      button.textContent = 'Ошибка LLM — нажмите, чтобы повторить';
+      return;
+    }
+
+    await fillBlocksWithAnswers(blocks, response.data.answers);
+
+    button.textContent = 'Заполнено ✓';
+    setTimeout(() => bar.remove(), 2000);
+  }
+
+  function injectManualFillButton() {
+    if (document.getElementById(FILL_BAR_ID)) return;
+
+    const bar = document.createElement('div');
+    bar.id = FILL_BAR_ID;
+    bar.style.cssText =
+      'position:fixed;top:0;left:0;right:0;z-index:2147483647;display:flex;justify-content:center;' +
+      'padding:10px;background:#dc2626;box-shadow:0 2px 8px rgba(0,0,0,0.25);';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = 'Автооткликер: заполнить ответы';
+    button.style.cssText =
+      'padding:10px 24px;background:#fff;color:#dc2626;border:none;border-radius:8px;' +
+      'font-size:15px;font-weight:600;cursor:pointer;';
+    button.addEventListener('click', () => handleManualFillClick(button, bar));
+
+    bar.appendChild(button);
+    document.body.prepend(bar);
+  }
+
+  // shown only when the bot isn't driving this page — if it's running, either the automatic
+  // pipeline already filled everything, or (assisted mode) it's mid-flow and will handle it itself
+  async function setupManualFillButton() {
+    const runState = await getRunState();
+    if (runState.status === 'running') return;
+
+    await waitFor(() => document.querySelector(SUBMIT_SELECTOR));
+    if (extractQuestionBlocks().length === 0) return;
+
+    injectManualFillButton();
   }
 
   async function run() {
@@ -366,6 +545,18 @@
         `count=${blocks.length} types=${blocks.map((b) => b.type).join(',') || 'none'}`,
       );
 
+      const stopWords = normalizeStopWords(settings.skipStopWordsRaw);
+      if (stopWords.length > 0) {
+        const testDescriptionText = document.querySelector(TEST_DESCRIPTION_SELECTOR)?.textContent || '';
+        const questionsText = blocks.map((b) => b.questionText).join('\n');
+        const matchedWord = matchStopWord(`${testDescriptionText}\n${questionsText}`, stopWords);
+        if (matchedWord) {
+          await trace('stop word matched, skipping', `word="${matchedWord}" vacancyId=${vacancyId}`);
+          await skipQuestionnaire({ vacancyId, title, company, listUrl, reason: 'stop_word' });
+          return;
+        }
+      }
+
       if (blocks.length > 0) {
         const llmAvailable = settings.llmEnabled && settings.apiKey && settings.apiKey.trim();
 
@@ -376,16 +567,7 @@
         }
 
         const llmStartedAt = Date.now();
-        const response = await chrome.runtime.sendMessage({
-          type: 'HHAA_GENERATE_ANSWERS',
-          payload: {
-            apiKey: settings.apiKey,
-            legend: settings.legend,
-            userPrompt: settings.stylePrompt,
-            questions: blocks.map(formatQuestionForLLM),
-            modelsRaw: settings.llmModelsRaw,
-          },
-        });
+        const response = await requestLLMAnswers(blocks, settings);
         await trace(
           'LLM response received',
           `success=${Boolean(response?.success)} tookMs=${Date.now() - llmStartedAt} error=${response?.error || 'none'}`,
@@ -396,17 +578,7 @@
           return;
         }
 
-        for (let i = 0; i < blocks.length; i += 1) {
-          const block = blocks[i];
-          const llmAnswer = response.data.answers[i];
-          if (block.type === 'text') {
-            fillNativeTextarea(block.textarea, llmAnswer);
-            answerRecords.push({ question: block.questionText, type: 'text', llmAnswer, selected: llmAnswer });
-          } else {
-            const selected = await fillChoiceAnswer(block, llmAnswer);
-            answerRecords.push({ question: block.questionText, type: block.inputType, llmAnswer, selected });
-          }
-        }
+        answerRecords.push(...(await fillBlocksWithAnswers(blocks, response.data.answers)));
       }
 
       const coverLetterSent = Boolean(
@@ -501,5 +673,8 @@
   }
 
   watchForChatWidget();
+  watchForDailyLimitNotification();
+  setupManualSkipButton();
+  setupManualFillButton();
   run();
 })();

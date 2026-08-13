@@ -46,6 +46,35 @@
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
+  const RESPONSE_ERROR_NOTIFICATION_SELECTOR = '[data-qa="vacancy-response-error-notification"]';
+  const DAILY_LIMIT_TEXT_HINT = 'не более 200 откликов';
+
+  // hh.ru enforces its own 200-responses/24h cap server-side and shows this snackbar instead of
+  // letting the response through — nothing left to try, so stop the run rather than keep clicking
+  // into a wall (and burning through delay/retry cycles for nothing)
+  function watchForDailyLimitNotification() {
+    let triggered = false;
+    const observer = new MutationObserver(async () => {
+      if (triggered) return;
+      const notification = document.querySelector(RESPONSE_ERROR_NOTIFICATION_SELECTOR);
+      if (!notification?.textContent?.includes(DAILY_LIMIT_TEXT_HINT)) return;
+
+      const runState = await getRunState();
+      if (runState.status !== 'running') return;
+
+      triggered = true;
+      console.warn('📋 [list] hh.ru daily response limit reached, stopping run');
+      await addDiagnosticLogEntry({
+        at: Date.now(),
+        level: 'warn',
+        module: 'list',
+        message: 'hh.ru daily response limit (200/24h) reached, run stopped automatically',
+      });
+      await saveRunState({ status: 'stopped' });
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -125,7 +154,9 @@
     return respondedToday;
   }
 
-  function normalizeCompanyBlacklist(raw) {
+  // shared by the company blacklist and the vacancy-title stop words — both are "one group of
+  // words per line" settings with the same matching rule, just checked against different text
+  function normalizeWordGroups(raw) {
     return (raw || '')
       .split('\n')
       .map((line) => line.trim().toLowerCase())
@@ -133,12 +164,12 @@
       .map((line) => line.split(/\s+/).filter(Boolean));
   }
 
-  // each blacklist line must have every one of its words present in the company name — words
-  // don't need to be adjacent, so "Администрация Самары" also matches "Администрация города Самары"
-  function isCompanyBlacklisted(company, wordLists) {
-    const normalized = (company || '').trim().toLowerCase();
+  // each line's words must ALL be present in the text — words don't need to be adjacent, so
+  // "Администрация Самары" also matches "Администрация города Самары"
+  function matchesWordGroups(text, wordGroups) {
+    const normalized = (text || '').trim().toLowerCase();
     if (!normalized) return false;
-    return wordLists.some((words) => words.every((word) => normalized.includes(word)));
+    return wordGroups.some((words) => words.every((word) => normalized.includes(word)));
   }
 
   function randomDelayMs(minSec, maxSec) {
@@ -194,7 +225,8 @@
   async function pickNextCard(runState, settings) {
     const cards = Array.from(document.querySelectorAll(CARD_SELECTOR));
     const blacklistIds = await getQuestionnaireBlacklistIds();
-    const companyLines = normalizeCompanyBlacklist(settings.blacklistCompaniesRaw);
+    const companyLines = normalizeWordGroups(settings.blacklistCompaniesRaw);
+    const titleStopWordLines = normalizeWordGroups(settings.vacancyTitleStopWordsRaw);
     const processed = new Set(runState.processedVacancyIds || []);
     const initialSize = processed.size;
     let picked = null;
@@ -212,7 +244,7 @@
         continue;
       }
 
-      if (isCompanyBlacklisted(card.company, companyLines)) {
+      if (matchesWordGroups(card.company, companyLines)) {
         processed.add(card.vacancyId);
         await addResponseLogEntry({
           at: Date.now(),
@@ -220,6 +252,18 @@
           title: card.title,
           company: card.company,
           result: 'skipped_company',
+        });
+        continue;
+      }
+
+      if (matchesWordGroups(card.title, titleStopWordLines)) {
+        processed.add(card.vacancyId);
+        await addResponseLogEntry({
+          at: Date.now(),
+          vacancyId: card.vacancyId,
+          title: card.title,
+          company: card.company,
+          result: 'skipped_title_stop_word',
         });
         continue;
       }
@@ -617,5 +661,6 @@
   }
 
   watchForChatWidget();
+  watchForDailyLimitNotification();
   start();
 })();

@@ -38,6 +38,7 @@ async function buildFeed() {
       icon: meta.icon,
       text: `${entry.title || 'Вакансия'} — ${meta.label}`,
       warn: entry.result === 'error',
+      vacancyId: entry.vacancyId || null,
     };
   });
 
@@ -52,7 +53,7 @@ async function buildFeed() {
       warn: true,
     }));
 
-  return [...responseItems, ...diagnosticItems].sort((a, b) => b.at - a.at).slice(0, 12);
+  return [...responseItems, ...diagnosticItems].sort((a, b) => b.at - a.at).slice(0, 36);
 }
 
 function renderFeed(items) {
@@ -68,6 +69,15 @@ function renderFeed(items) {
           <span class="icon">${item.icon}</span>
           <span class="time">${formatTime(item.at)}</span>
           <span>${item.text}</span>
+          ${
+            item.vacancyId
+              ? `<a class="event-link"
+                    href="https://hh.ru/vacancy/${item.vacancyId}"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    title="Открыть вакансию">🔗</a>`
+              : ''
+          }
         </li>
       `,
     )
@@ -88,7 +98,7 @@ async function render() {
   }
 
   const respondedToday = runState.dateForCounter === todayString() ? runState.respondedToday || 0 : 0;
-  els.dailyCounter.textContent = `${respondedToday} / ${settings.dailyLimit || 200}`;
+  els.dailyCounter.textContent = String(respondedToday);
 
   if (runState.status === 'running' && runState.currentVacancyTitle) {
     els.currentVacancy.hidden = false;
@@ -290,6 +300,80 @@ async function handleDownloadDiagnostics() {
   }, 1500);
 }
 
+// strips whitespace AND leading/trailing punctuation together (a stray ", " or "." grabbed by an
+// imprecise selection shouldn't end up as its own stop-word line)
+const EDGE_JUNK = /^[\s.,;:!?"'«»()\-–—]+|[\s.,;:!?"'«»()\-–—]+$/g;
+
+function trimStopWordSelection(text) {
+  return (text || '').replace(EDGE_JUNK, '');
+}
+
+async function addVacancyTitleStopWord(word) {
+  const settings = await getSettings();
+  const lines = (settings.vacancyTitleStopWordsRaw || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.some((line) => line.toLowerCase() === word.toLowerCase())) return;
+
+  lines.push(word);
+  const next = lines.join('\n');
+  await saveSettings({ vacancyTitleStopWordsRaw: next });
+
+  // the settings tab's textarea lives in the same document (tabs are just CSS-toggled) — keep it
+  // in sync even when that tab isn't the one currently showing
+  const textarea = document.getElementById('vacancyTitleStopWords');
+  if (textarea) textarea.value = next;
+}
+
+// lets the user select vacancy title text straight out of the event feed and one-click it into
+// the "стоп-слова в названии" list instead of retyping it in settings
+function setupSelectionStopWordButton(feedEl) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'selection-stopword-btn';
+  button.textContent = 'Добавить в стоп-слова';
+  button.hidden = true;
+  document.body.appendChild(button);
+
+  function hideButton() {
+    button.hidden = true;
+  }
+
+  // mousedown (not click) fires before the browser clears the selection on a plain click elsewhere
+  document.addEventListener('mousedown', (event) => {
+    if (event.target !== button) hideButton();
+  });
+
+  document.addEventListener('mouseup', (event) => {
+    if (event.target === button) return;
+
+    const selection = window.getSelection();
+    const text = selection?.toString().trim();
+    if (!text || selection.isCollapsed || !feedEl.contains(selection.anchorNode)) {
+      hideButton();
+      return;
+    }
+
+    const rect = selection.getRangeAt(0).getBoundingClientRect();
+    button.style.left = `${rect.left + rect.width / 2}px`;
+    button.style.top = `${Math.max(8, rect.top - 8)}px`;
+    button.hidden = false;
+  });
+
+  // keeps the selection alive through the click (a plain click would otherwise collapse it first)
+  button.addEventListener('mousedown', (event) => event.preventDefault());
+
+  button.addEventListener('click', async () => {
+    const selection = window.getSelection();
+    const trimmed = trimStopWordSelection(selection?.toString());
+    hideButton();
+    selection?.removeAllRanges();
+    if (trimmed) await addVacancyTitleStopWord(trimmed);
+  });
+}
+
 export function initRunView() {
   els = {
     statusDot: document.getElementById('statusDot'),
@@ -318,6 +402,8 @@ export function initRunView() {
   els.modeAssistedBtn.addEventListener('click', () => handleModeChange('assisted'));
   els.approveSubmitBtn.addEventListener('click', handleApproveSubmit);
   els.approveSkipBtn.addEventListener('click', handleApproveSkip);
+
+  setupSelectionStopWordButton(els.eventFeed);
 
   render();
 }

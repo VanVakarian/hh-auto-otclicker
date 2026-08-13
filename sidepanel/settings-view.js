@@ -12,6 +12,8 @@ const FIELD_MAP = [
   { id: 'coverLetterEnabled', key: 'coverLetterEnabled', kind: 'checkbox' },
   { id: 'coverLetterText', key: 'coverLetterText', kind: 'text' },
   { id: 'blacklistCompanies', key: 'blacklistCompaniesRaw', kind: 'text' },
+  { id: 'skipStopWords', key: 'skipStopWordsRaw', kind: 'text' },
+  { id: 'vacancyTitleStopWords', key: 'vacancyTitleStopWordsRaw', kind: 'text' },
 ];
 
 async function renderBlacklistCount() {
