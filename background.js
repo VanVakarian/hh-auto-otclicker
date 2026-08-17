@@ -1,4 +1,4 @@
-import { generateAnswers } from './lib/llm.js';
+import { generateAnswers, generateChatReply } from './lib/llm.js';
 import {
   KEYS,
   addNavigationLogEntry,
@@ -15,6 +15,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 const LIST_URL_PATTERN = /^https:\/\/hh\.ru\/search\/vacancy/;
 const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/hh\.ru\/applicant\/vacancy_response/;
+const CHAT_URL_PATTERN = /^https:\/\/hh\.ru\/chat/;
 
 // A hard (non-SPA) navigation kills a content script's JS context outright the instant it commits —
 // no error, no catch, whatever was mid-`await` just stops existing. That means self-recovery code
@@ -92,6 +93,7 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
   let file = null;
   if (LIST_URL_PATTERN.test(url)) file = 'content-scripts/vacancy-list.js';
   else if (QUESTIONNAIRE_URL_PATTERN.test(url)) file = 'content-scripts/vacancy-questionnaire.js';
+  else if (CHAT_URL_PATTERN.test(url)) file = 'content-scripts/chat-tools.js';
 
   let injectionError = null;
   if (file) {
@@ -117,16 +119,27 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(
 );
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== 'HHAA_GENERATE_ANSWERS') return false;
+  if (message.type === 'HHAA_GENERATE_ANSWERS') {
+    generateAnswers(message.payload)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error(`🧠 [background] generateAnswers threw: ${error.message}`);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
 
-  generateAnswers(message.payload)
-    .then(sendResponse)
-    .catch((error) => {
-      console.error(`🧠 [background] generateAnswers threw: ${error.message}`);
-      sendResponse({ success: false, error: error.message });
-    });
+  if (message.type === 'HHAA_GENERATE_CHAT_REPLY') {
+    generateChatReply(message.payload)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error(`🧠 [background] generateChatReply threw: ${error.message}`);
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
 
-  return true;
+  return false;
 });
 
 function updateBadge(runState) {

@@ -14,6 +14,8 @@ const FIELD_MAP = [
   { id: 'blacklistCompanies', key: 'blacklistCompaniesRaw', kind: 'text' },
   { id: 'skipStopWords', key: 'skipStopWordsRaw', kind: 'text' },
   { id: 'vacancyTitleStopWords', key: 'vacancyTitleStopWordsRaw', kind: 'text' },
+  { id: 'chatQuickMessages', key: 'chatQuickMessagesRaw', kind: 'text' },
+  { id: 'chatLlmPrompt', key: 'chatLlmPromptRaw', kind: 'text' },
 ];
 
 async function renderBlacklistCount() {

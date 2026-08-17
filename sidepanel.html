@@ -268,6 +268,30 @@
     </div>
 
     <div class="card">
+      <div class="form-group">
+        <label for="chatQuickMessages"
+               class="form-label">Сообщения для быстрой отправки в чате (каждая строка — отдельное сообщение)</label>
+        <textarea id="chatQuickMessages"
+                  class="form-textarea"
+                  rows="4"
+                  placeholder="Например:&#10;Здравствуйте&#10;&#10;Понравилась ваша вакансия? Давайте пообщаемся"></textarea>
+        <div class="hint">Пустые строки игнорируются — ими удобно отделять сообщения друг от друга. Кнопка «ᯓ➤»
+          появится в списке чатов у открытого чата, если в него можно писать.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="chatLlmPrompt"
+               class="form-label">Промпт для LLM-ответа в чате</label>
+        <textarea id="chatLlmPrompt"
+                  class="form-textarea"
+                  rows="4"
+                  placeholder="Например:&#10;В этом сообщении есть вопросы ко мне. Ответь на них согласно моей легенде, в том же порядке и с той же нумерацией. Пришли только сами ответы, без вступлений."></textarea>
+        <div class="hint">Кнопка 🤖 появится у каждого сообщения работодателя, если в чат можно писать — сгенерированный
+          ответ вставляется в поле сообщения (не отправляется автоматически).</div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="counter-row">
         <span class="counter-label">Анкетный чёрный список</span>
         <span class="counter-value"
