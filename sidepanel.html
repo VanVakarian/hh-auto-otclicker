@@ -301,6 +301,28 @@
               id="resetBlacklistBtn"
               class="submit-btn submit-btn_secondary">Сбросить</button>
     </div>
+
+    <div class="card">
+      <h2 class="card-title">Перенос данных</h2>
+      <div class="hint">Выгружает и загружает целиком всё, что хранит расширение: настройки, чёрный список
+        компаний и анкет, историю откликов, диагностику и заполненные анкеты. Пригодится при переносе
+        на другой браузер или компьютер — импорт полностью заменит текущее состояние содержимым файла.</div>
+      <div class="button-row">
+        <button type="button"
+                id="exportAllBtn"
+                class="submit-btn submit-btn_secondary">Экспортировать всё</button>
+        <button type="button"
+                id="importAllBtn"
+                class="submit-btn submit-btn_secondary">Импортировать всё</button>
+      </div>
+      <input type="file"
+             id="importAllFileInput"
+             accept="application/json,.json"
+             hidden>
+      <div class="data-transfer-status"
+           id="dataTransferStatus"
+           hidden></div>
+    </div>
   </section>
 
   <script type="module"

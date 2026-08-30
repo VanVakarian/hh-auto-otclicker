@@ -216,6 +216,26 @@ body {
   line-height: 1.4;
 }
 
+.data-transfer-status {
+  margin-top: 10px;
+  padding: 9px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.data-transfer-status_success {
+  background: rgba(22, 163, 74, 0.08);
+  border-left: 3px solid var(--success);
+  color: #157a3a;
+}
+
+.data-transfer-status_error {
+  background: #fdecea;
+  border-left: 3px solid var(--danger);
+  color: #a4302b;
+}
+
 .counter-row {
   display: flex;
   align-items: center;
