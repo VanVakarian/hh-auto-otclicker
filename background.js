@@ -13,9 +13,11 @@ chrome.runtime.onInstalled.addListener(async () => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
 
-const LIST_URL_PATTERN = /^https:\/\/hh\.ru\/search\/vacancy/;
-const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/hh\.ru\/applicant\/vacancy_response/;
-const CHAT_URL_PATTERN = /^https:\/\/hh\.ru\/chat/;
+// hh.ru redirects logged-in users to a regional subdomain (samara.hh.ru, spb.hh.ru, ...) instead of
+// keeping them on the bare hh.ru host, so every pattern here has to allow an optional subdomain.
+const LIST_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/search\/vacancy/;
+const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/applicant\/vacancy_response/;
+const CHAT_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/chat/;
 
 // A hard (non-SPA) navigation kills a content script's JS context outright the instant it commits —
 // no error, no catch, whatever was mid-`await` just stops existing. That means self-recovery code
@@ -110,7 +112,7 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
   if (!file) await recoverStrayTab(tabId, url);
 }
 
-const HH_RU_FILTER = { url: [{ hostEquals: 'hh.ru' }] };
+const HH_RU_FILTER = { url: [{ hostEquals: 'hh.ru' }, { hostSuffix: '.hh.ru' }] };
 
 chrome.webNavigation.onCompleted.addListener((details) => injectForNavigation(details, 'onCompleted'), HH_RU_FILTER);
 chrome.webNavigation.onHistoryStateUpdated.addListener(

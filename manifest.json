@@ -12,6 +12,7 @@
   ],
   "host_permissions": [
     "https://hh.ru/*",
+    "https://*.hh.ru/*",
     "https://openrouter.ai/*"
   ],
   "icons": {

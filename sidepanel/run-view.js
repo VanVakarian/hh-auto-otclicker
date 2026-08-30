@@ -10,8 +10,11 @@ import {
 } from '../lib/storage.js';
 import { resultMeta, formatTime } from './format.js';
 
-const LIST_URL_PATTERN = /^https:\/\/hh\.ru\/search\/vacancy/;
-const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/hh\.ru\/applicant\/vacancy_response/;
+// hh.ru redirects logged-in users to a regional subdomain (samara.hh.ru, spb.hh.ru, ...) instead of
+// keeping them on the bare hh.ru host, so every pattern here has to allow an optional subdomain.
+const LIST_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/search\/vacancy/;
+const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/applicant\/vacancy_response/;
+const HH_HOST_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\//;
 
 const STATUS_LABELS = {
   idle: 'Ожидание',
@@ -135,7 +138,7 @@ async function render() {
 async function handleStart() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
-  if (!tab?.url?.startsWith('https://hh.ru/search/vacancy')) {
+  if (!LIST_URL_PATTERN.test(tab?.url || '')) {
     els.startHint.textContent = 'Откройте страницу поиска вакансий на hh.ru в активной вкладке и нажмите «Старт».';
     return;
   }
@@ -209,7 +212,7 @@ function classifyUrl(url) {
   if (typeof url !== 'string') return 'unknown';
   if (LIST_URL_PATTERN.test(url)) return 'list';
   if (QUESTIONNAIRE_URL_PATTERN.test(url)) return 'questionnaire';
-  if (url.startsWith('https://hh.ru/')) return 'other_hh_page';
+  if (HH_HOST_PATTERN.test(url)) return 'other_hh_page';
   return 'non_hh_page';
 }
 

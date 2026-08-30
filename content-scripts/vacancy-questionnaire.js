@@ -17,6 +17,9 @@
   const CELL_SELECTOR = 'label[data-qa="cell"]';
   const CELL_TEXT_SELECTOR = '[data-qa="cell-text-content"]';
   const LETTER_TEXTAREA_SELECTOR = '[data-qa="vacancy-response-popup-form-letter-input"]';
+  // unlike the in-list popup, this page doesn't disable the submit button up front for a required
+  // cover letter — it only reveals that via this validation error after a rejected submit
+  const LETTER_REQUIRED_ERROR_SELECTOR = '[data-qa="letter-required"]';
   const SUBMIT_SELECTOR = '[data-qa="vacancy-response-submit-popup"]';
   const SKIP_BUTTON_ID = 'hhaa-skip-vacancy-btn';
   const FILL_BAR_ID = 'hhaa-manual-fill-bar';
@@ -403,6 +406,7 @@
     assisted_skipped: 'skipped_assisted',
     stop_word: 'skipped_stop_word',
     manual_skip: 'skipped_manual',
+    cover_letter_required: 'skipped_cover_letter_required',
   };
 
   async function skipQuestionnaire({ vacancyId, title, company, listUrl, reason }) {
@@ -581,7 +585,7 @@
         answerRecords.push(...(await fillBlocksWithAnswers(blocks, response.data.answers)));
       }
 
-      const coverLetterSent = Boolean(
+      let coverLetterSent = Boolean(
         settings.coverLetterEnabled && settings.coverLetterText && settings.coverLetterText.trim(),
       );
       if (coverLetterSent) {
@@ -612,20 +616,39 @@
         }
       }
 
-      const submitButton = document.querySelector(SUBMIT_SELECTOR);
+      function submitConfirmed() {
+        const button = document.querySelector(SUBMIT_SELECTOR);
+        return !button || button.disabled || !location.pathname.startsWith('/applicant/vacancy_response');
+      }
+
       // same human-pause reasoning as the popup path — a beat before submitting, not instant fill-then-send
       await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
-      submitButton.click();
+      document.querySelector(SUBMIT_SELECTOR)?.click();
 
       // a fixed pause isn't proof the submit went through — wait for an actual state change
       // (button gone/disabled, or the page navigated away from the questionnaire)
-      const confirmed = await waitFor(
-        () => {
-          const button = document.querySelector(SUBMIT_SELECTOR);
-          return !button || button.disabled || !location.pathname.startsWith('/applicant/vacancy_response');
-        },
-        { timeout: 5000 },
-      );
+      let confirmed = await waitFor(submitConfirmed, { timeout: 5000 });
+
+      // a required cover letter we hadn't proactively filled (coverLetterEnabled off) only surfaces
+      // here, as a rejected submit — mirrors the in-list popup's isRequired handling in vacancy-list.js,
+      // just detected after the fact instead of up front via a disabled submit button
+      if (!confirmed && !coverLetterSent && document.querySelector(LETTER_REQUIRED_ERROR_SELECTOR)) {
+        const haveLetterText = Boolean(settings.coverLetterText && settings.coverLetterText.trim());
+
+        if (!haveLetterText) {
+          await trace('cover letter required but none configured, skipping', `vacancyId=${vacancyId}`);
+          await skipQuestionnaire({ vacancyId, title, company, listUrl, reason: 'cover_letter_required' });
+          return;
+        }
+
+        await trace('cover letter required, filling and retrying submit', `vacancyId=${vacancyId}`);
+        await fillCoverLetter(settings.coverLetterText);
+        coverLetterSent = true;
+
+        await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+        document.querySelector(SUBMIT_SELECTOR)?.click();
+        confirmed = await waitFor(submitConfirmed, { timeout: 5000 });
+      }
 
       await trace('submit confirmation check', `confirmed=${Boolean(confirmed)} url=${location.href}`);
 

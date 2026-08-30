@@ -15,7 +15,9 @@
   const MESSAGE_DELAY_MS = 1000;
 
   const INCOMING_MESSAGE_ID_RE = /^chatik-chat-message-(\d+)$/;
-  const INCOMING_BUBBLE_CLASS_HINT = 'chat-bubble_incoming';
+  // human employer replies use chat-bubble_incoming, hh's own "AI assistant" replies use
+  // chat-bubble_bot — both are messages the applicant didn't send, so both get the LLM-reply button
+  const INCOMING_BUBBLE_CLASS_HINTS = ['chat-bubble_incoming', 'chat-bubble_bot'];
   const MESSAGE_TEXT_SELECTOR = '[data-qa="chat-bubble-text"]';
   const LLM_REPLY_BUTTON_CLASS = 'hhaa-llm-reply-btn';
 
@@ -252,7 +254,9 @@
         return messageId ? { container, messageId } : null;
       })
       .filter(Boolean)
-      .filter(({ container }) => container.querySelector(`[class*="${INCOMING_BUBBLE_CLASS_HINT}"]`));
+      .filter(({ container }) =>
+        INCOMING_BUBBLE_CLASS_HINTS.some((hint) => container.querySelector(`[class*="${hint}"]`)),
+      );
   }
 
   function getBubbleContentEl(container, messageId) {
