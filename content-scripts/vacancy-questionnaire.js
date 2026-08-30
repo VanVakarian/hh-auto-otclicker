@@ -74,6 +74,20 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // Stop needs to interrupt the human-like pauses themselves, not just get checked once per
+  // vacancy — otherwise pressing Stop mid-pause still waits out the rest of that multi-second
+  // delay before anything reacts. Returns false the moment a stop is seen, so the caller can bail
+  // before taking the action the pause was leading up to (a submit).
+  async function sleepUnlessStopped(ms, interval = 200) {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      const runState = await getRunState();
+      if (runState.status !== 'running') return false;
+      await sleep(Math.min(interval, ms - (Date.now() - start)));
+    }
+    return true;
+  }
+
   async function waitFor(predicate, { timeout = 4000, interval = 150 } = {}) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
@@ -621,8 +635,10 @@
         return !button || button.disabled || !location.pathname.startsWith('/applicant/vacancy_response');
       }
 
-      // same human-pause reasoning as the popup path — a beat before submitting, not instant fill-then-send
-      await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+      // same human-pause reasoning as the popup path — a beat before submitting, not instant fill-then-send.
+      // Interruptible so a Stop pressed during this pause skips the submit, same as the assisted-mode
+      // decision === 'stopped' case above: leave the page as-is rather than sending after a stop.
+      if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) return;
       document.querySelector(SUBMIT_SELECTOR)?.click();
 
       // a fixed pause isn't proof the submit went through — wait for an actual state change
@@ -645,7 +661,7 @@
         await fillCoverLetter(settings.coverLetterText);
         coverLetterSent = true;
 
-        await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+        if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) return;
         document.querySelector(SUBMIT_SELECTOR)?.click();
         confirmed = await waitFor(submitConfirmed, { timeout: 5000 });
       }

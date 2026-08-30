@@ -23,8 +23,10 @@
   const MODAL_LETTER_INPUT_SELECTOR = '[data-qa="vacancy-response-popup-form-letter-input"]';
   const MODAL_TASK_BODY_SELECTOR = '[data-qa="task-body"]';
   // hh.ru refuses the response outright when the resume's own visibility setting excludes this
-  // employer — no cover letter fixes that, it's a resume-settings issue, not a missing-letter one
-  const RESUME_VISIBILITY_TEXT = 'видимость резюме';
+  // employer — no cover letter fixes that, it's a resume-settings issue, not a missing-letter one.
+  // The warning block is always present in the popup's DOM (collapsed via max-height:0 when not
+  // applicable), so its text alone can't be used to detect the block — only its actual visibility can.
+  const RESUME_VISIBILITY_WARNING_SELECTOR = '[data-qa="hidden-resume-warning"]';
 
   // hh.ru shows this confirmation (its own separate dialog, not the response popup's modal-overlay)
   // when the vacancy's country differs from the resume's — it blocks the response until confirmed
@@ -77,6 +79,20 @@
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // Stop needs to interrupt the human-like pauses themselves, not just get checked once per
+  // vacancy — otherwise pressing Stop mid-pause still waits out the rest of that multi-second
+  // delay before anything reacts. Returns false the moment a stop is seen, so the caller can bail
+  // before taking the action the pause was leading up to (a click, a submit).
+  async function sleepUnlessStopped(ms, interval = 200) {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      const runState = await getRunState();
+      if (runState.status !== 'running') return false;
+      await sleep(Math.min(interval, ms - (Date.now() - start)));
+    }
+    return true;
   }
 
   async function waitFor(predicate, { timeout = 8000, interval = 250 } = {}) {
@@ -185,6 +201,13 @@
     } catch {
       return null;
     }
+  }
+
+  function isVisible(el) {
+    if (!el) return false;
+    const rect = el.getBoundingClientRect();
+    const style = window.getComputedStyle(el);
+    return rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
   }
 
   function fillNativeTextarea(textarea, value) {
@@ -395,7 +418,7 @@
       return;
     }
 
-    if (overlay.textContent.toLowerCase().includes(RESUME_VISIBILITY_TEXT)) {
+    if (isVisible(overlay.querySelector(RESUME_VISIBILITY_WARNING_SELECTOR))) {
       // detected up front instead of falling through the letter-fill path — filling a cover letter
       // and waiting for the button to unblock would never work here, it's not what's blocking it
       console.log(`📋 [list] response popup blocked by resume visibility settings, skipping "${card.title}"`);
@@ -433,8 +456,14 @@
     }
 
     // pause before submitting so the filled popup is actually visible for a moment, like a human
-    // pausing to glance over the letter before hitting send, instead of an instant fill-then-submit
-    await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+    // pausing to glance over the letter before hitting send, instead of an instant fill-then-submit.
+    // Interruptible so a Stop pressed during this pause skips the submit entirely rather than
+    // waiting out the delay and sending a response after the user already asked to stop.
+    if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) {
+      closeButton?.click();
+      await clearPendingVacancy();
+      return;
+    }
     await trace('response popup: clicking submit', `vacancyId=${card.vacancyId}`);
     submitButton.click();
 
@@ -526,7 +555,7 @@
         await saveRunState({ status: 'stopped' });
         return;
       }
-      await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+      if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) return;
       const nextUrl = nextPageLink.href;
       console.log('📋 [list] page exhausted, moving to next page');
       await trace('page exhausted, moving to next page', `nextUrl=${nextUrl}`);
@@ -546,10 +575,18 @@
       awaitingApproval: false,
     });
 
-    card.cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    await sleep(1100); // let the smooth scroll settle before interacting, like a human would
+    card.cardEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    // let the smooth scroll settle before interacting, like a human would — interruptible so a Stop
+    // pressed during this pause takes effect immediately instead of waiting out the full delay
+    if (!(await sleepUnlessStopped(1100))) {
+      await clearPendingVacancy();
+      return;
+    }
 
-    await sleep(randomDelayMs(settings.delayMinSec, settings.delayMaxSec));
+    if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) {
+      await clearPendingVacancy();
+      return;
+    }
     console.log(`📋 [list] responding to "${card.title}" (${card.company})`);
     await trace(
       'clicking response link',
