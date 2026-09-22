@@ -34,18 +34,45 @@
 
   const CHAT_WIDGET_CLOSE_SELECTOR = '[data-qa="chatik-close-chatik"]';
 
+  // Chrome invalidates every chrome.* call in an already-loaded content script the moment the
+  // extension itself is reloaded/updated (routine during dev) — the tab keeps running old JS with
+  // no way back into the extension, and this is the one error message Chrome uses for that state.
+  function isContextInvalidatedError(error) {
+    return typeof error?.message === 'string' && error.message.includes('Extension context invalidated');
+  }
+
+  let contextInvalidated = false;
+  let chatWidgetObserver = null;
+  let dailyLimitObserver = null;
+
+  // once the extension context is gone there is no recovery path short of reloading the page —
+  // stop both observers instead of retrying forever and re-failing on every single DOM mutation
+  function haltOnContextInvalidated() {
+    if (contextInvalidated) return;
+    contextInvalidated = true;
+    chatWidgetObserver?.disconnect();
+    dailyLimitObserver?.disconnect();
+    console.warn('📋 [list] extension was reloaded/updated — reload this page to restore the bot');
+  }
+
   // hh.ru's global chat widget can pop open on its own (e.g. an employer's auto-message that
   // only accepts a button reply) while the bot is running — nothing here needs to read it, so
   // it's simplest to just close it on sight rather than support answering it.
   function watchForChatWidget() {
-    const observer = new MutationObserver(async () => {
+    chatWidgetObserver = new MutationObserver(async () => {
+      if (contextInvalidated) return;
       const closeButton = document.querySelector(CHAT_WIDGET_CLOSE_SELECTOR);
       if (!closeButton) return;
-      const runState = await getRunState();
-      if (runState.status !== 'running') return;
-      closeButton.click();
+      try {
+        const runState = await getRunState();
+        if (runState.status !== 'running') return;
+        closeButton.click();
+      } catch (error) {
+        if (isContextInvalidatedError(error)) haltOnContextInvalidated();
+        else throw error;
+      }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    chatWidgetObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   const RESPONSE_ERROR_NOTIFICATION_SELECTOR = '[data-qa="vacancy-response-error-notification"]';
@@ -56,25 +83,30 @@
   // into a wall (and burning through delay/retry cycles for nothing)
   function watchForDailyLimitNotification() {
     let triggered = false;
-    const observer = new MutationObserver(async () => {
-      if (triggered) return;
+    dailyLimitObserver = new MutationObserver(async () => {
+      if (contextInvalidated || triggered) return;
       const notification = document.querySelector(RESPONSE_ERROR_NOTIFICATION_SELECTOR);
       if (!notification?.textContent?.includes(DAILY_LIMIT_TEXT_HINT)) return;
 
-      const runState = await getRunState();
-      if (runState.status !== 'running') return;
+      try {
+        const runState = await getRunState();
+        if (runState.status !== 'running') return;
 
-      triggered = true;
-      console.warn('📋 [list] hh.ru daily response limit reached, stopping run');
-      await addDiagnosticLogEntry({
-        at: Date.now(),
-        level: 'warn',
-        module: 'list',
-        message: 'hh.ru daily response limit (200/24h) reached, run stopped automatically',
-      });
-      await saveRunState({ status: 'stopped' });
+        triggered = true;
+        console.warn('📋 [list] hh.ru daily response limit reached, stopping run');
+        await addDiagnosticLogEntry({
+          at: Date.now(),
+          level: 'warn',
+          module: 'list',
+          message: 'hh.ru daily response limit (200/24h) reached, run stopped automatically',
+        });
+        await saveRunState({ status: 'stopped' });
+      } catch (error) {
+        if (isContextInvalidatedError(error)) haltOnContextInvalidated();
+        else throw error;
+      }
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    dailyLimitObserver.observe(document.body, { childList: true, subtree: true });
   }
 
   function sleep(ms) {
@@ -685,6 +717,10 @@
 
       await processNextCard();
     } catch (error) {
+      if (isContextInvalidatedError(error)) {
+        haltOnContextInvalidated();
+        return;
+      }
       console.error(`📋 [list] fatal error: ${error.message}`);
       await addDiagnosticLogEntry({
         at: Date.now(),

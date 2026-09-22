@@ -280,6 +280,17 @@
       </div>
 
       <div class="form-group">
+        <label for="chatSuggestedReplies"
+               class="form-label">Готовые ответы кнопками в чате (каждая строка — отдельная кнопка)</label>
+        <textarea id="chatSuggestedReplies"
+                  class="form-textarea"
+                  rows="4"
+                  placeholder="Например:&#10;Здравствуйте!&#10;Какая схема оплаты?&#10;Готов пообщаться по телефону"></textarea>
+        <div class="hint">Под полем ввода сообщения появится блок с кнопками — по одной на строку, как готовые
+          ответы у самого hh.ru. Клик по кнопке сразу отправляет её текст в открытый чат.</div>
+      </div>
+
+      <div class="form-group">
         <label for="chatLlmPrompt"
                class="form-label">Промпт для LLM-ответа в чате</label>
         <textarea id="chatLlmPrompt"

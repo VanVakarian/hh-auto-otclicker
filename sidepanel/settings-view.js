@@ -22,6 +22,7 @@ const FIELD_MAP = [
   { id: 'skipStopWords', key: 'skipStopWordsRaw', kind: 'text' },
   { id: 'vacancyTitleStopWords', key: 'vacancyTitleStopWordsRaw', kind: 'text' },
   { id: 'chatQuickMessages', key: 'chatQuickMessagesRaw', kind: 'text' },
+  { id: 'chatSuggestedReplies', key: 'chatSuggestedRepliesRaw', kind: 'text' },
   { id: 'chatLlmPrompt', key: 'chatLlmPromptRaw', kind: 'text' },
 ];
 
