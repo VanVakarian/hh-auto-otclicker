@@ -1,5 +1,5 @@
-import { getResponseLog, getAnswersLog } from '../lib/storage.js';
-import { resultMeta, isSuccess, formatTime, formatDateShort, dayKey } from './format.js';
+import { getResponseLog, getAnswersLog, isSuccessResult } from '../lib/storage.js';
+import { resultMeta, formatTime, formatDateShort, dayKey } from './format.js';
 
 let els = {};
 
@@ -20,7 +20,7 @@ function computeStats(log) {
   };
 
   log.forEach((entry) => {
-    if (isSuccess(entry.result)) {
+    if (isSuccessResult(entry.result)) {
       stats.allTime += 1;
       if (dayKey(entry.at) === today) stats.today += 1;
       if (entry.at >= weekAgo) stats.week += 1;
@@ -55,7 +55,7 @@ function buildLast7Days(log) {
   const byKey = new Map(days.map((d) => [d.key, d]));
 
   log.forEach((entry) => {
-    if (!isSuccess(entry.result)) return;
+    if (!isSuccessResult(entry.result)) return;
     const day = byKey.get(dayKey(entry.at));
     if (day) day.count += 1;
   });

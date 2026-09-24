@@ -81,6 +81,25 @@ async function recoverStrayTab(tabId, url) {
   }
 }
 
+// a script that never loaded can't report anything itself, so the failure is surfaced from here:
+// into the diagnostic log (and the sidepanel feed) always, and as a run error when this is the tab
+// the run is driving — the run can't proceed on a page whose entry script isn't running
+async function failRunOnInjectionError(tabId, file, url, injectionError) {
+  console.error(`🧠 [background] injection of ${file} into tab ${tabId} failed: ${injectionError}`);
+  await addDiagnosticLogEntry({
+    at: Date.now(),
+    level: 'error',
+    module: 'background',
+    message: `injection of ${file} failed`,
+    context: `tabId=${tabId} url=${url} error=${injectionError} extensionUrl=${chrome.runtime.getURL('')}`,
+  });
+
+  const runState = await getRunState();
+  if (runState.status === 'running' && runState.tabId === tabId) {
+    await saveRunState({ status: 'error', lastError: `Не удалось загрузить ${file}: ${injectionError}` });
+  }
+}
+
 // hh.ru is a SPA: the "Откликнуться" click can be a pushState navigation with no document
 // reload, which static manifest content_scripts never re-run for. Inject programmatically on
 // every real and history-API navigation instead, so the right script always runs.
@@ -100,14 +119,33 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
   let injectionError = null;
   if (file) {
     try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: [file] });
+      // entries are ES modules sharing code with the rest of the extension — a content script can't be
+      // one directly, so a one-line stub imports it. A module runs once per document, which is also
+      // what makes the two racing injections (onCompleted + onHistoryStateUpdated) harmless.
+      // executeScript resolves fine even when the import inside the stub rejects (blocked resource,
+      // module top-level throw) — the stub has to hand the failure back as its result, otherwise
+      // the run just sits on "running" with a page nobody is driving
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async (path) => {
+          try {
+            await import(chrome.runtime.getURL(path));
+            return null;
+          } catch (error) {
+            return `${error.name}: ${error.message}`;
+          }
+        },
+        args: [file],
+      });
+      injectionError = injection?.result ?? null;
     } catch (error) {
       injectionError = error.message;
-      console.error(`🧠 [background] injection of ${file} failed: ${error.message}`);
     }
   }
 
   await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: file, injectionError });
+
+  if (injectionError) await failRunOnInjectionError(tabId, file, url, injectionError);
 
   if (!file) await recoverStrayTab(tabId, url);
 }

@@ -19,12 +19,6 @@ export function resultMeta(result) {
   return RESULT_META[result] || { icon: '•', label: result };
 }
 
-const SUCCESS_RESULTS = new Set(['success_instant', 'success_popup', 'success_questionnaire']);
-
-export function isSuccess(result) {
-  return SUCCESS_RESULTS.has(result);
-}
-
 export function formatTime(ts) {
   return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }

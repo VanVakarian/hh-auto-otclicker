@@ -3,10 +3,11 @@ import {
   saveSettings,
   getRunState,
   saveRunState,
+  startRun,
   getResponseLog,
   getDiagnosticLog,
   getNavigationLog,
-  todayString,
+  getRespondedTodayCount,
 } from '../lib/storage.js';
 import { resultMeta, formatTime } from './format.js';
 
@@ -88,7 +89,11 @@ function renderFeed(items) {
 }
 
 async function render() {
-  const [runState, settings] = await Promise.all([getRunState(), getSettings()]);
+  const [runState, settings, respondedToday] = await Promise.all([
+    getRunState(),
+    getSettings(),
+    getRespondedTodayCount(),
+  ]);
 
   els.statusDot.className = `status-dot ${statusDotClass(runState.status)}`;
   els.statusText.textContent = STATUS_LABELS[runState.status] || runState.status;
@@ -100,7 +105,6 @@ async function render() {
     els.statusError.hidden = true;
   }
 
-  const respondedToday = runState.dateForCounter === todayString() ? runState.respondedToday || 0 : 0;
   els.dailyCounter.textContent = String(respondedToday);
 
   if (runState.status === 'running' && runState.currentVacancyTitle) {
@@ -143,17 +147,7 @@ async function handleStart() {
     return;
   }
 
-  await saveRunState({
-    status: 'running',
-    tabId: tab.id,
-    listUrl: tab.url,
-    processedVacancyIds: [],
-    pendingVacancy: null,
-    currentVacancyTitle: null,
-    currentVacancyCompany: null,
-    startedAt: Date.now(),
-    lastError: null,
-  });
+  await startRun({ tabId: tab.id, listUrl: tab.url });
 
   await chrome.tabs.reload(tab.id);
   await render();
@@ -202,9 +196,27 @@ async function getActiveTabSnapshot(tabId) {
   if (!tabId) return { note: 'runState.tabId not set' };
   try {
     const tab = await chrome.tabs.get(tabId);
-    return { id: tab.id, url: tab.url, status: tab.status, title: tab.title };
+    return { id: tab.id, url: tab.url, status: tab.status, title: tab.title, page: await probeTabPage(tabId) };
   } catch (error) {
     return { note: `chrome.tabs.get(${tabId}) failed: ${error.message}` };
+  }
+}
+
+// what the page itself looks like right now — answers "no cards / captcha / blank page" without
+// needing the content script to have run at all. The selector mirrors CARD_SELECTOR in vacancy-list.js.
+async function probeTabPage(tabId) {
+  try {
+    const [probe] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => ({
+        readyState: document.readyState,
+        cards: document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]').length,
+        bodyHead: document.body.innerText.slice(0, 200).replace(/\s+/g, ' '),
+      }),
+    });
+    return probe.result;
+  } catch (error) {
+    return { note: `page probe failed: ${error.message}` };
   }
 }
 
@@ -219,9 +231,41 @@ function classifyUrl(url) {
 // plain-language read of "is this run stuck, and why" — cross-referencing runState against the
 // tab's actual current URL is what actually answers that question; the rest of the report is the
 // evidence backing this verdict up
-function buildDiagnosis(runState, activeTab, navigationLog) {
+function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
   const lines = [];
   const tabUrlClass = classifyUrl(activeTab?.url);
+
+  const runNavigation = navigationLog.filter(
+    (entry) => entry.tabId === runState.tabId && entry.at >= runState.startedAt,
+  );
+  const failedInjection = runNavigation.find((entry) => entry.injectionError);
+  if (runState.status !== 'idle' && failedInjection) {
+    lines.push(
+      `ЗАГРУЗКА СКРИПТА НЕ УДАЛАСЬ: ${failedInjection.injectedFile} на "${failedInjection.url}" — ${failedInjection.injectionError}. ` +
+        'Модуль не исполнялся вообще, поэтому в recentDiagnostics от него ничего нет.',
+    );
+  }
+
+  // 'entry loaded' (list) / 'questionnaire page opened' are the first thing each entry writes — their
+  // absence after a successful injection means the module was pulled in but never got as far as running
+  const ENTRY_TRACES = ['entry loaded', 'questionnaire page opened'];
+  const entryRan = diagnosticLog.some(
+    (entry) => entry.at >= runState.startedAt && ENTRY_TRACES.includes(entry.message),
+  );
+  const injectedOk = runNavigation.some((entry) => entry.injectedFile && !entry.injectionError);
+  if (runState.status === 'running' && injectedOk && !entryRan && Date.now() - runState.startedAt > 10000) {
+    lines.push(
+      'Скрипт инжектнут без ошибок, но с момента старта нет ни одной записи "entry loaded" — модуль загружен, ' +
+        'но не дошёл до выполнения (или статус в хранилище не "running" на момент его запуска). См. activeTab.page.',
+    );
+  }
+
+  if (runState.status === 'running' && tabUrlClass === 'list' && activeTab.page?.cards === 0) {
+    lines.push(
+      `На странице вкладки 0 карточек вакансий (readyState=${activeTab.page.readyState}, начало текста: "${activeTab.page.bodyHead}") — ` +
+        'возможна капча/антибот-страница или изменилась вёрстка.',
+    );
+  }
 
   if (runState.status === 'running' && tabUrlClass === 'other_hh_page') {
     lines.push(
@@ -280,7 +324,9 @@ async function handleDownloadDiagnostics() {
     extensionVersion: chrome.runtime.getManifest().version,
     generatedAt: new Date().toISOString(),
     userAgent: navigator.userAgent,
-    diagnosis: buildDiagnosis(runState, activeTab, navigationLog),
+    extensionUrl: chrome.runtime.getURL(''),
+    webAccessibleResources: chrome.runtime.getManifest().web_accessible_resources,
+    diagnosis: buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog),
     runState,
     activeTab,
     settings: { ...settings, apiKey: settings.apiKey ? '(задан)' : '(не задан)', legend: undefined },
