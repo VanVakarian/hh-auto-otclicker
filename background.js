@@ -9,6 +9,7 @@ import {
   addResponseLogEntry,
 } from './lib/storage.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from './lib/diagnostics.js';
+import { addCaptchaPicture } from './lib/captcha-store.js';
 
 installUncaughtErrorCapture('background');
 
@@ -172,6 +173,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then(sendResponse)
       .catch((error) => {
         reportError('background', `generateChatReply threw: ${error.message}`, stackOf(error));
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
+  // a message can't carry a Blob, so the picture arrives as a data URL and is stored as binary
+  if (message.type === 'HHAA_SAVE_CAPTCHA') {
+    const { key, dataUrl } = message.payload;
+    fetch(dataUrl)
+      .then((response) => response.blob())
+      .then((blob) => addCaptchaPicture({ key, at: Date.now(), blob }))
+      .then(() => sendResponse({ success: true }))
+      .catch((error) => {
+        reportError('background', `saving captcha picture failed: ${error.message}`, stackOf(error));
         sendResponse({ success: false, error: error.message });
       });
     return true;

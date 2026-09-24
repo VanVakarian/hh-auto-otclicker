@@ -12,6 +12,8 @@ import {
   getRespondedTodayCount,
   DIAGNOSTIC_RETENTION_MS,
 } from '../lib/storage.js';
+import { getCaptchaPictures, deleteCaptchaPictures } from '../lib/captcha-store.js';
+import { createZip } from '../lib/zip.js';
 import { resultMeta, formatTime } from './format.js';
 import { reportError } from '../lib/diagnostics.js';
 
@@ -389,6 +391,60 @@ async function handleDownloadDiagnostics() {
   }, 1500);
 }
 
+function flashLabel(button, text) {
+  const original = button.textContent;
+  button.textContent = text;
+  setTimeout(() => {
+    button.textContent = original;
+  }, 1500);
+}
+
+// resolves true only when the browser reports the file fully written; false if it was cancelled or failed
+async function downloadCompleted(url, filename) {
+  const id = await chrome.downloads.download({ url, filename });
+  for (;;) {
+    const [item] = await chrome.downloads.search({ id });
+    if (item.state !== 'in_progress') return item.state === 'complete';
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+// Every captcha picture the watcher has saved, as one ZIP of bare PNGs (oldest first) — nothing else in
+// it. The pictures are deleted from the archive once the browser confirms the file is on disk, and only
+// the ones that went into it: a captcha that arrives mid-download waits for the next zip. If the
+// download fails or is cancelled they all stay.
+async function handleDownloadCaptchas() {
+  const pictures = await getCaptchaPictures();
+  if (pictures.length === 0) {
+    flashLabel(els.downloadCaptchasBtn, 'Капч пока нет');
+    return;
+  }
+
+  const files = await Promise.all(
+    pictures.map(async ({ blob }, index) => ({
+      name: `captcha-${String(index + 1).padStart(3, '0')}.png`,
+      data: new Uint8Array(await blob.arrayBuffer()),
+    })),
+  );
+
+  const url = URL.createObjectURL(createZip(files));
+  try {
+    if (!(await downloadCompleted(url, `hhaa-captchas-${Date.now()}.zip`))) {
+      flashLabel(els.downloadCaptchasBtn, 'Не скачалось, капчи сохранены');
+      return;
+    }
+  } catch (error) {
+    await reportError('run-view', `captcha zip download failed: ${error.message}`);
+    flashLabel(els.downloadCaptchasBtn, 'Не скачалось, капчи сохранены');
+    return;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  await deleteCaptchaPictures(pictures.map(({ key }) => key));
+  flashLabel(els.downloadCaptchasBtn, `Скачано: ${pictures.length} ✓`);
+}
+
 // strips whitespace AND leading/trailing punctuation together (a stray ", " or "." grabbed by an
 // imprecise selection shouldn't end up as its own stop-word line)
 const EDGE_JUNK = /^[\s.,;:!?"'«»()\-–—]+|[\s.,;:!?"'«»()\-–—]+$/g;
@@ -475,6 +531,7 @@ export function initRunView() {
     startHint: document.getElementById('startHint'),
     eventFeed: document.getElementById('eventFeed'),
     downloadDiagnosticsBtn: document.getElementById('downloadDiagnosticsBtn'),
+    downloadCaptchasBtn: document.getElementById('downloadCaptchasBtn'),
     modeAutoBtn: document.getElementById('modeAutoBtn'),
     modeAssistedBtn: document.getElementById('modeAssistedBtn'),
     modeHint: document.getElementById('modeHint'),
@@ -489,6 +546,7 @@ export function initRunView() {
   els.startBtn.addEventListener('click', handleStart);
   els.stopBtn.addEventListener('click', handleStop);
   els.downloadDiagnosticsBtn.addEventListener('click', handleDownloadDiagnostics);
+  els.downloadCaptchasBtn.addEventListener('click', handleDownloadCaptchas);
   els.modeAutoBtn.addEventListener('click', () => handleModeChange('auto'));
   els.modeAssistedBtn.addEventListener('click', () => handleModeChange('assisted'));
   els.approveSubmitBtn.addEventListener('click', handleApproveSubmit);
