@@ -6,6 +6,7 @@ import {
   exportFullState,
   importFullState,
 } from '../lib/storage.js';
+import { reportError, stackOf } from '../lib/diagnostics.js';
 
 const FIELD_MAP = [
   { id: 'llmEnabled', key: 'llmEnabled', kind: 'checkbox' },
@@ -64,7 +65,7 @@ async function handleExportAll(button, statusEl) {
     );
     button.textContent = 'Экспортировано ✓';
   } catch (error) {
-    console.error(`⚙️ [settings] export failed: ${error.message}`);
+    reportError('settings', `export failed: ${error.message}`, stackOf(error));
     setDataTransferStatus(statusEl, `Ошибка экспорта: ${error.message}`, 'error');
   } finally {
     setTimeout(() => {
@@ -129,7 +130,7 @@ async function handleImportFile(file, statusEl) {
     );
     setTimeout(() => location.reload(), 1200);
   } catch (error) {
-    console.error(`⚙️ [settings] import failed: ${error.message}`);
+    reportError('settings', `import failed: ${error.message}`, stackOf(error));
     setDataTransferStatus(statusEl, `Ошибка импорта: ${error.message}`, 'error');
   }
 }

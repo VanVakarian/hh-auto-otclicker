@@ -5,16 +5,16 @@ import {
   getQuestionnaireBlacklist,
   addQuestionnaireBlacklistEntry,
   addResponseLogEntry,
-  addDiagnosticLogEntry,
   addTraceEntry,
   getRespondedTodayCount,
 } from '../lib/storage.js';
-import { sleep, waitFor, isVisible } from '../lib/dom.js';
+import { waitFor, isVisible } from '../lib/dom.js';
 import { normalizeWordGroups, matchesWordGroups } from '../lib/matching.js';
-import { randomDelayMs } from '../lib/pacing.js';
-import { sleepUnlessStopped } from '../lib/run-control.js';
+import { randomDelayMs, reactionDelayMs } from '../lib/pacing.js';
+import { sleepUnlessStopped, humanPause, isRunStoppedError } from '../lib/run-control.js';
 import { click, scrollToElement, fillText } from '../lib/interaction.js';
 import { startPageWatchers } from '../lib/page-watchers.js';
+import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import {
   isContextInvalidatedError,
   haltOnContextInvalidated,
@@ -43,6 +43,8 @@ const RESUME_VISIBILITY_WARNING_SELECTOR = '[data-qa="hidden-resume-warning"]';
 // hh.ru shows this confirmation (its own separate dialog, not the response popup's modal-overlay)
 // when the vacancy's country differs from the resume's — it blocks the response until confirmed
 const RELOCATION_WARNING_CONFIRM_SELECTOR = '[data-qa="relocation-warning-confirm"]';
+
+const POST_RESPONSE_SETTLE_MS = 500;
 
 const trace = (message, context) => addTraceEntry('list', message, context);
 
@@ -158,14 +160,11 @@ async function clearPendingVacancy() {
 // lets the run actually continue either way.
 async function recoverFromStrayNavigation(card, listUrl, source) {
   const strayUrl = location.href;
-  console.warn(`📋 [list] ${source} left the list ("${strayUrl}") for "${card.title}", returning to list`);
-  await addDiagnosticLogEntry({
-    at: Date.now(),
-    level: 'warn',
-    module: 'list',
-    message: `${source}: navigated away from list unexpectedly`,
-    context: `vacancyId=${card.vacancyId} title="${card.title}" strayUrl=${strayUrl} listUrl=${listUrl}`,
-  });
+  await reportWarning(
+    'list',
+    `${source}: navigated away from list unexpectedly`,
+    `vacancyId=${card.vacancyId} title="${card.title}" strayUrl=${strayUrl} listUrl=${listUrl}`,
+  );
   await markProcessed(card.vacancyId);
   await addResponseLogEntry({
     at: Date.now(),
@@ -181,37 +180,46 @@ async function recoverFromStrayNavigation(card, listUrl, source) {
   location.replace(listUrl);
 }
 
-async function waitForClickOutcome(vacancyId, { timeout = 6000, interval = 200 } = {}) {
-  const start = Date.now();
+async function waitForClickOutcome(vacancyId) {
   let relocationWarningConfirmed = false;
 
-  while (Date.now() - start < timeout) {
-    if (location.pathname.startsWith('/applicant/vacancy_response')) return 'navigated';
-    if (document.querySelector(MODAL_OVERLAY_SELECTOR)) return 'modal';
+  const outcome = await waitFor(
+    async () => {
+      if (location.pathname.startsWith('/applicant/vacancy_response')) return 'navigated';
+      if (document.querySelector(MODAL_OVERLAY_SELECTOR)) return 'modal';
 
-    // "you're responding to a vacancy in another country" — a separate confirm dialog that blocks
-    // everything else (navigation, the response popup) until "Все равно откликнуться" is clicked
-    if (!relocationWarningConfirmed) {
-      const relocationConfirm = document.querySelector(RELOCATION_WARNING_CONFIRM_SELECTOR);
-      if (relocationConfirm) {
-        relocationWarningConfirmed = true;
-        await trace('relocation warning shown, confirming', `vacancyId=${vacancyId}`);
-        await click(relocationConfirm);
+      // "you're responding to a vacancy in another country" — a separate confirm dialog that blocks
+      // everything else (navigation, the response popup) until "Все равно откликнуться" is clicked
+      if (!relocationWarningConfirmed) {
+        const relocationConfirm = document.querySelector(RELOCATION_WARNING_CONFIRM_SELECTOR);
+        if (relocationConfirm) {
+          relocationWarningConfirmed = true;
+          await trace('relocation warning shown, confirming', `vacancyId=${vacancyId}`);
+          // nobody confirms a dialog in the same instant it appears — this one has no pause of its own
+          await humanPause(reactionDelayMs());
+          await click(relocationConfirm);
+        }
       }
-    }
 
-    // some vacancies redirect (SPA pushState, same script instance survives) to their own
-    // /vacancy/<id> page and show the response popup there instead of on the list — the URL flips
-    // before the popup renders, so leaving the list can't be treated as a dead end right away; keep
-    // polling for the popup until the outer timeout, same as if we'd never left the list
-    if (location.pathname.startsWith('/search/vacancy') && !isStillRespondable(vacancyId)) return 'instant';
-    await sleep(interval);
-  }
-  return location.pathname.startsWith('/search/vacancy') ? 'unknown' : 'navigated_away';
+      // some vacancies redirect (SPA pushState, same script instance survives) to their own
+      // /vacancy/<id> page and show the response popup there instead of on the list — the URL flips
+      // before the popup renders, so leaving the list can't be treated as a dead end right away; keep
+      // polling for the popup until the outer timeout, same as if we'd never left the list
+      if (location.pathname.startsWith('/search/vacancy') && !isStillRespondable(vacancyId)) return 'instant';
+      return null;
+    },
+    { timeout: 6000, interval: 200 },
+  );
+
+  return outcome ?? (location.pathname.startsWith('/search/vacancy') ? 'unknown' : 'navigated_away');
 }
 
+// dismissing a popup is a reaction to having just looked at it, so it gets a person-sized beat first. A
+// Stop only cuts that beat short — the popup is still closed, a stopped run must not leave it open.
 async function closePopup(closeButton) {
-  if (closeButton) await click(closeButton);
+  if (!closeButton) return;
+  await sleepUnlessStopped(reactionDelayMs());
+  await click(closeButton);
 }
 
 async function skipModalResponse(card, reason) {
@@ -246,7 +254,7 @@ async function handleResponseModal(card) {
   );
 
   if (!submitButton) {
-    console.warn(`📋 [list] response popup has no submit button, closing for "${card.title}"`);
+    await reportWarning('list', 'response popup has no submit button, closing', `title="${card.title}"`);
     await closePopup(closeButton);
     await skipModalResponse(card, 'popup_unrecognized');
     return;
@@ -291,7 +299,7 @@ async function handleResponseModal(card) {
   }
 
   if (submitButton.disabled) {
-    console.warn(`📋 [list] response popup still blocked after fill, skipping "${card.title}"`);
+    await reportWarning('list', 'response popup still blocked after fill, skipping', `title="${card.title}"`);
     await closePopup(closeButton);
     await skipModalResponse(card, 'popup_blocked');
     return;
@@ -314,19 +322,22 @@ async function handleResponseModal(card) {
   const closed = await waitFor(() => !document.querySelector(MODAL_OVERLAY_SELECTOR), { timeout: 4000 });
 
   if (!closed) {
-    console.warn(`📋 [list] response popup did not close after submit for "${card.title}", treating as failed`);
+    // a watcher may have stopped the run meanwhile (the daily limit refusal shows up inside this very
+    // popup) — then the popup staying open is that refusal, not a failed vacancy worth logging as one
+    if ((await getRunState()).status !== 'running') {
+      await closePopup(closeButton);
+      await clearPendingVacancy();
+      return;
+    }
     // what the popup is showing right now is the only clue to why hh.ru didn't take the response
     // (validation error, captcha, a second confirmation) — captured before the popup gets closed
     const overlayText = overlay.innerText.slice(0, 300).replace(/\s+/g, ' ');
-    await addDiagnosticLogEntry({
-      at: Date.now(),
-      level: 'warn',
-      module: 'list',
-      message: 'popup did not close after submit',
-      context:
-        `vacancyId=${card.vacancyId} title="${card.title}" submitDisabled=${submitButton.disabled} ` +
+    await reportWarning(
+      'list',
+      'popup did not close after submit',
+      `vacancyId=${card.vacancyId} title="${card.title}" submitDisabled=${submitButton.disabled} ` +
         `relocationDialog=${Boolean(document.querySelector(RELOCATION_WARNING_CONFIRM_SELECTOR))} overlayText="${overlayText}"`,
-    });
+    );
     await closePopup(closeButton);
     await addResponseLogEntry({
       at: Date.now(),
@@ -363,14 +374,11 @@ async function processNextCard() {
   // yet, a hh.ru quirk, anything), operating on a DOM that isn't the list is worse than just
   // going back to the known-good list URL and letting the scan resume from there
   if (!location.pathname.startsWith('/search/vacancy')) {
-    console.warn(`📋 [list] processNextCard running off the list page ("${location.href}"), returning to list`);
-    await addDiagnosticLogEntry({
-      at: Date.now(),
-      level: 'warn',
-      module: 'list',
-      message: 'processNextCard invoked off the list page',
-      context: `url=${location.href} listUrl=${runState.listUrl}`,
-    });
+    await reportWarning(
+      'list',
+      'processNextCard invoked off the list page',
+      `url=${location.href} listUrl=${runState.listUrl}`,
+    );
     if (runState.listUrl) {
       location.replace(runState.listUrl); // replace, same back-button reasoning as recoverFromStrayNavigation
     } else {
@@ -389,6 +397,12 @@ async function processNextCard() {
     await saveRunState({ status: 'stopped' });
     return;
   }
+
+  // right after a response hh.ru animates an extra block into the card that was just answered, pushing
+  // everything below it down — scrolling to the next card mid-animation would land on a spot that's
+  // about to move, so the page gets a moment to finish first. Before the pick, not after: the card
+  // is then chosen from the settled DOM, not from one that may still be re-rendering.
+  if (!(await sleepUnlessStopped(POST_RESPONSE_SETTLE_MS))) return;
 
   const cardsOnPage = document.querySelectorAll(CARD_SELECTOR).length;
   const card = await pickNextCard(runState, settings);
@@ -466,14 +480,11 @@ async function processNextCard() {
   }
 
   if (outcome === 'unknown') {
-    console.warn(`📋 [list] response button still present after click for "${card.title}", skipping`);
-    await addDiagnosticLogEntry({
-      at: Date.now(),
-      level: 'warn',
-      module: 'list',
-      message: 'click did not appear to register',
-      context: `vacancyId=${card.vacancyId} title="${card.title}"`,
-    });
+    await reportWarning(
+      'list',
+      'click did not appear to register',
+      `vacancyId=${card.vacancyId} title="${card.title}"`,
+    );
     await addResponseLogEntry({
       at: Date.now(),
       vacancyId: card.vacancyId,
@@ -515,14 +526,11 @@ async function start() {
 
     if (!document.querySelector(CARD_SELECTOR)) {
       const message = 'Не нашли карточки вакансий на странице — возможно, изменилась вёрстка hh.ru';
-      console.error(`📋 [list] ${message}`);
-      await addDiagnosticLogEntry({
-        at: Date.now(),
-        level: 'error',
-        module: 'list',
-        message: 'vacancy cards not found',
-        context: `title="${document.title}" bodyHead="${document.body.innerText.slice(0, 200).replace(/\s+/g, ' ')}" url=${location.href}`,
-      });
+      await reportError(
+        'list',
+        'vacancy cards not found',
+        `title="${document.title}" bodyHead="${document.body.innerText.slice(0, 200).replace(/\s+/g, ' ')}" url=${location.href}`,
+      );
       await saveRunState({ status: 'error', lastError: message });
       return;
     }
@@ -533,20 +541,17 @@ async function start() {
       haltOnContextInvalidated();
       return;
     }
-    console.error(`📋 [list] fatal error: ${error.message}`);
-    await addDiagnosticLogEntry({
-      at: Date.now(),
-      level: 'error',
-      module: 'list',
-      message: error.message,
-      context: location.href,
-    });
+    // Stop pressed while held (a captcha on screen): same as every other stopped early-return here
+    if (isRunStoppedError(error)) return;
+    await reportError('list', `fatal error: ${error.message}`, `${location.href} ${stackOf(error)}`);
     await saveRunState({ status: 'error', lastError: error.message });
   }
 }
 
 onContextInvalidated(() => {
-  console.warn('📋 [list] extension was reloaded/updated — reload this page to restore the bot');
+  // nothing can be written to the log from a dead context, and a warn here would sit on the Errors page
+  console.log('📋 [list] extension was reloaded/updated — reload this page to restore the bot');
 });
-startPageWatchers({ module: 'list', logPrefix: '📋 [list]' });
+installUncaughtErrorCapture('list');
+startPageWatchers('list');
 start();

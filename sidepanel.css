@@ -159,12 +159,14 @@ body {
   box-shadow: 0 2px 8px rgba(214, 0, 28, 0.25);
 }
 
-.approval-card {
+.approval-card,
+.pause-card {
   border-color: var(--warning);
   background: var(--warning-soft);
 }
 
-.approval-card .card-title {
+.approval-card .card-title,
+.pause-card .card-title {
   color: var(--warning);
 }
 
@@ -185,6 +187,10 @@ body {
 .status-dot.running {
   background: var(--success);
   animation: pulse 1.6s ease-in-out infinite;
+}
+
+.status-dot.paused {
+  background: var(--warning);
 }
 
 .status-dot.error {

@@ -3,12 +3,20 @@ import {
   KEYS,
   addNavigationLogEntry,
   getRunState,
+  getRunPause,
+  maintainJournals,
   saveRunState,
   addResponseLogEntry,
-  addDiagnosticLogEntry,
 } from './lib/storage.js';
+import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from './lib/diagnostics.js';
+
+installUncaughtErrorCapture('background');
+
+chrome.runtime.onStartup.addListener(() => maintainJournals());
 
 chrome.runtime.onInstalled.addListener(async () => {
+  // an update can bring a new storage layout — the journals are brought to it right away
+  maintainJournals();
   console.log('🧠 [background] installed, enabling side panel on action click');
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
@@ -42,18 +50,11 @@ async function recoverStrayTab(tabId, url) {
   recoveringTabs.add(tabId);
   setTimeout(() => recoveringTabs.delete(tabId), 5000);
 
-  console.warn(
-    `🧠 [background] tab ${tabId} landed on "${url}" with no matching content script while running, recovering`,
+  await reportWarning(
+    'background',
+    'tab landed on unrecognized page while running (content script never had a chance to recover), forcing return to list',
+    `url=${url} listUrl=${runState.listUrl} tabId=${tabId}`,
   );
-
-  await addDiagnosticLogEntry({
-    at: Date.now(),
-    level: 'warn',
-    module: 'background',
-    message:
-      'tab landed on unrecognized page while running (content script never had a chance to recover), forcing return to list',
-    context: `url=${url} listUrl=${runState.listUrl} tabId=${tabId}`,
-  });
 
   const pending = runState.pendingVacancy;
   if (pending) {
@@ -77,7 +78,7 @@ async function recoverStrayTab(tabId, url) {
   try {
     await chrome.tabs.update(tabId, { url: runState.listUrl });
   } catch (error) {
-    console.error(`🧠 [background] failed to navigate tab ${tabId} back to list: ${error.message}`);
+    await reportError('background', `failed to navigate tab ${tabId} back to list: ${error.message}`);
   }
 }
 
@@ -85,14 +86,11 @@ async function recoverStrayTab(tabId, url) {
 // into the diagnostic log (and the sidepanel feed) always, and as a run error when this is the tab
 // the run is driving — the run can't proceed on a page whose entry script isn't running
 async function failRunOnInjectionError(tabId, file, url, injectionError) {
-  console.error(`🧠 [background] injection of ${file} into tab ${tabId} failed: ${injectionError}`);
-  await addDiagnosticLogEntry({
-    at: Date.now(),
-    level: 'error',
-    module: 'background',
-    message: `injection of ${file} failed`,
-    context: `tabId=${tabId} url=${url} error=${injectionError} extensionUrl=${chrome.runtime.getURL('')}`,
-  });
+  await reportError(
+    'background',
+    `injection of ${file} failed`,
+    `tabId=${tabId} url=${url} error=${injectionError} extensionUrl=${chrome.runtime.getURL('')}`,
+  );
 
   const runState = await getRunState();
   if (runState.status === 'running' && runState.tabId === tabId) {
@@ -163,7 +161,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     generateAnswers(message.payload)
       .then(sendResponse)
       .catch((error) => {
-        console.error(`🧠 [background] generateAnswers threw: ${error.message}`);
+        reportError('background', `generateAnswers threw: ${error.message}`, stackOf(error));
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -173,7 +171,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     generateChatReply(message.payload)
       .then(sendResponse)
       .catch((error) => {
-        console.error(`🧠 [background] generateChatReply threw: ${error.message}`);
+        reportError('background', `generateChatReply threw: ${error.message}`, stackOf(error));
         sendResponse({ success: false, error: error.message });
       });
     return true;
@@ -182,12 +180,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-function updateBadge(runState) {
-  if (!runState) return;
+async function updateBadge() {
+  const [runState, pause] = await Promise.all([getRunState(), getRunPause()]);
 
   if (runState.status === 'error') {
     chrome.action.setBadgeText({ text: '!' });
     chrome.action.setBadgeBackgroundColor({ color: '#dc2626' });
+    return;
+  }
+
+  // "running" that is standing still until a human clears something (a captcha) — the one state
+  // where the user has to act, so it must not look like the green "all fine" dot
+  if (runState.status === 'running' && pause.length > 0) {
+    chrome.action.setBadgeText({ text: '||' });
+    chrome.action.setBadgeBackgroundColor({ color: '#d97706' });
     return;
   }
 
@@ -201,6 +207,6 @@ function updateBadge(runState) {
 }
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== 'local' || !changes[KEYS.RUN_STATE]) return;
-  updateBadge(changes[KEYS.RUN_STATE].newValue);
+  if (areaName !== 'local' || !(changes[KEYS.RUN_STATE] || changes[KEYS.RUN_PAUSE])) return;
+  updateBadge();
 });

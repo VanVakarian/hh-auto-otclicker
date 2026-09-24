@@ -1,6 +1,7 @@
-import { getSettings, addDiagnosticLogEntry } from '../lib/storage.js';
+import { getSettings } from '../lib/storage.js';
 import { sleep, waitFor } from '../lib/dom.js';
 import { click, fillText } from '../lib/interaction.js';
+import { reportWarning, installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import {
   isContextInvalidated,
   isContextInvalidatedError,
@@ -50,13 +51,7 @@ function normalizeMessageLines(raw) {
 // a logging helper must never itself throw: it's always called from a catch/finally path, so a
 // failure here would replace the original error with a confusing one about the logger instead
 function warn(message, context) {
-  console.warn(`💬 [chat-tools] ${message}`);
-  return addDiagnosticLogEntry({ at: Date.now(), level: 'warn', module: 'chat-tools', message, context }).catch(
-    (error) => {
-      if (isContextInvalidatedError(error)) haltOnContextInvalidated();
-      // any other storage failure here is already reported via the console.warn above
-    },
-  );
+  return reportWarning('chat-tools', message, context);
 }
 
 function currentChatId() {
@@ -512,6 +507,8 @@ function scheduleTick() {
     });
 }
 
+installUncaughtErrorCapture('chat-tools');
+
 const domObserver = new MutationObserver(scheduleTick);
 domObserver.observe(document.body, { childList: true, subtree: true });
 
@@ -522,7 +519,8 @@ const fallbackPollId = setInterval(scheduleTick, FALLBACK_POLL_INTERVAL_MS);
 onContextInvalidated(() => {
   domObserver.disconnect();
   clearInterval(fallbackPollId);
-  console.warn('💬 [chat-tools] extension was reloaded/updated — reload this page to restore chat tools');
+  // nothing can be written to the log from a dead context, and a warn here would sit on the Errors page
+  console.log('💬 [chat-tools] extension was reloaded/updated — reload this page to restore chat tools');
 });
 
 scheduleTick();

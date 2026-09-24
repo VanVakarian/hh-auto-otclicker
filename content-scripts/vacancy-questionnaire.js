@@ -5,16 +5,16 @@ import {
   saveRunState,
   addQuestionnaireBlacklistEntry,
   addResponseLogEntry,
-  addDiagnosticLogEntry,
   addAnswersLogEntry,
   addTraceEntry,
 } from '../lib/storage.js';
 import { waitFor, isVisible } from '../lib/dom.js';
 import { normalizeStopWords, matchStopWord } from '../lib/matching.js';
 import { randomDelayMs } from '../lib/pacing.js';
-import { sleepUnlessStopped } from '../lib/run-control.js';
+import { sleepUnlessStopped, isRunStoppedError } from '../lib/run-control.js';
 import { click, fillText } from '../lib/interaction.js';
 import { startPageWatchers } from '../lib/page-watchers.js';
+import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import {
   isContextInvalidatedError,
   haltOnContextInvalidated,
@@ -79,8 +79,11 @@ function extractQuestionBlocks() {
       return;
     }
 
-    console.warn(`📝 [questionnaire] question with unknown answer type: "${questionText}"`);
-    trace('question has no recognized answer input (not radio/checkbox/textarea)', `question="${questionText}"`);
+    reportWarning(
+      'questionnaire',
+      'question has no recognized answer input (not radio/checkbox/textarea)',
+      `question="${questionText}"`,
+    );
   });
 
   return blocks;
@@ -160,12 +163,12 @@ async function fillChoiceAnswer(block, answer) {
 
   const fuzzy = fragments.map((f) => findFuzzyOption(block.options, f)).filter(Boolean);
   if (fuzzy.length > 0) {
-    console.warn(`📝 [questionnaire] no exact match for "${block.questionText}", using closest guess`);
+    reportWarning('questionnaire', 'no exact match for the LLM answer, using closest guess', `question="${block.questionText}"`);
     for (const option of fuzzy) await click(option.input);
     return `≈ ${fuzzy.map((option) => option.text).join('; ')}`;
   }
 
-  console.warn(`📝 [questionnaire] could not answer: "${block.questionText}"`);
+  reportWarning('questionnaire', 'could not answer the question', `question="${block.questionText}"`);
   return null;
 }
 
@@ -546,23 +549,24 @@ async function run() {
       haltOnContextInvalidated();
       return;
     }
-    console.error(`📝 [questionnaire] fatal error: ${error.message}`);
-    await addDiagnosticLogEntry({
-      at: Date.now(),
-      level: 'error',
-      module: 'questionnaire',
-      message: error.message,
-      context: `vacancyId=${vacancyId} url=${location.href}`,
-    });
+    // Stop pressed while held (a captcha on screen): leave the page as-is, like every other stop here
+    if (isRunStoppedError(error)) return;
+    await reportError(
+      'questionnaire',
+      `fatal error: ${error.message}`,
+      `vacancyId=${vacancyId} url=${location.href} ${stackOf(error)}`,
+    );
     // stay on the page instead of navigating away, so the failure can be inspected
     await saveRunState({ status: 'error', lastError: error.message });
   }
 }
 
 onContextInvalidated(() => {
-  console.warn('📝 [questionnaire] extension was reloaded/updated — reload this page to restore the bot');
+  // nothing can be written to the log from a dead context, and a warn here would sit on the Errors page
+  console.log('📝 [questionnaire] extension was reloaded/updated — reload this page to restore the bot');
 });
-startPageWatchers({ module: 'questionnaire', logPrefix: '📝 [questionnaire]' });
+installUncaughtErrorCapture('questionnaire');
+startPageWatchers('questionnaire');
 setupManualSkipButton();
 setupManualFillButton();
 run();

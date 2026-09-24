@@ -1,15 +1,19 @@
 import {
+  PauseReason,
   getSettings,
   saveSettings,
   getRunState,
+  getRunPause,
   saveRunState,
   startRun,
   getResponseLog,
   getDiagnosticLog,
   getNavigationLog,
   getRespondedTodayCount,
+  DIAGNOSTIC_RETENTION_MS,
 } from '../lib/storage.js';
 import { resultMeta, formatTime } from './format.js';
+import { reportError } from '../lib/diagnostics.js';
 
 // hh.ru redirects logged-in users to a regional subdomain (samara.hh.ru, spb.hh.ru, ...) instead of
 // keeping them on the bare hh.ru host, so every pattern here has to allow an optional subdomain.
@@ -24,16 +28,28 @@ const STATUS_LABELS = {
   error: 'Ошибка',
 };
 
+// "running" that stands still until a human clears something on the page — what to tell them to do
+const PAUSE_MESSAGES = {
+  [PauseReason.CAPTCHA]: 'Введите капчу на странице hh.ru и нажмите «Отправить» — работа продолжится сама.',
+};
+
 let els = {};
 
-function statusDotClass(status) {
+function statusDotClass(status, isPaused) {
+  if (isPaused) return 'paused';
   if (status === 'running') return 'running';
   if (status === 'error') return 'error';
   return '';
 }
 
+// the compact feed shows a few dozen latest events — it has no use for the whole retained day
+const FEED_WINDOW_MS = 6 * 60 * 60 * 1000;
+
 async function buildFeed() {
-  const [responseLog, diagnosticLog] = await Promise.all([getResponseLog(), getDiagnosticLog()]);
+  const [responseLog, diagnosticLog] = await Promise.all([
+    getResponseLog({ sinceMs: FEED_WINDOW_MS }),
+    getDiagnosticLog({ sinceMs: FEED_WINDOW_MS }),
+  ]);
 
   const responseItems = responseLog.map((entry) => {
     const meta = resultMeta(entry.result);
@@ -89,14 +105,21 @@ function renderFeed(items) {
 }
 
 async function render() {
-  const [runState, settings, respondedToday] = await Promise.all([
+  const [runState, pause, settings, respondedToday] = await Promise.all([
     getRunState(),
+    getRunPause(),
     getSettings(),
     getRespondedTodayCount(),
   ]);
 
-  els.statusDot.className = `status-dot ${statusDotClass(runState.status)}`;
-  els.statusText.textContent = STATUS_LABELS[runState.status] || runState.status;
+  // whatever a stopped run left in the pause record is leftovers, only a running run can be paused
+  const isPaused = runState.status === 'running' && pause.length > 0;
+
+  els.statusDot.className = `status-dot ${statusDotClass(runState.status, isPaused)}`;
+  els.statusText.textContent = isPaused ? 'Пауза' : STATUS_LABELS[runState.status] || runState.status;
+
+  els.pauseCard.hidden = !isPaused;
+  if (isPaused) els.pauseText.textContent = PAUSE_MESSAGES[pause[0]] || 'Ждём, пока страница снова станет доступна.';
 
   if (runState.status === 'error' && runState.lastError) {
     els.statusError.hidden = false;
@@ -176,7 +199,7 @@ async function sendQuestionnaireDecision(decision) {
       decision,
     });
   } catch (error) {
-    console.error(`🖥️ [run-view] failed to send decision to tab ${runState.tabId}: ${error.message}`);
+    reportError('run-view', `failed to send decision to tab ${runState.tabId}: ${error.message}`);
   }
 
   await render();
@@ -242,7 +265,7 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
   if (runState.status !== 'idle' && failedInjection) {
     lines.push(
       `ЗАГРУЗКА СКРИПТА НЕ УДАЛАСЬ: ${failedInjection.injectedFile} на "${failedInjection.url}" — ${failedInjection.injectionError}. ` +
-        'Модуль не исполнялся вообще, поэтому в recentDiagnostics от него ничего нет.',
+        'Модуль не исполнялся вообще, поэтому в diagnostics от него ничего нет.',
     );
   }
 
@@ -289,16 +312,28 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
     lines.push(
       `На вкладке "в работе" вакансия ${runState.pendingVacancy.vacancyId} ("${runState.pendingVacancy.title}"), ` +
         'но выполнение до сюда дошло и не завершилось — клик был сделан, но ни один из ожидаемых исходов ' +
-        '(анкета/попап/мгновенный отклик/возврат) не сработал и не записался в recentDiagnostics/recentResponses.',
+        '(анкета/попап/мгновенный отклик/возврат) не сработал и не записался в diagnostics/responses.',
     );
   }
 
   const lastNav = navigationLog[navigationLog.length - 1];
   if (lastNav && !lastNav.injectedFile) {
     lines.push(
-      `Последняя навигация в hhaa_navigationLog (${new Date(lastNav.at).toLocaleString('ru-RU')}, источник ${lastNav.source}) ` +
+      `Последняя навигация в navigation (${new Date(lastNav.at).toLocaleString('ru-RU')}, источник ${lastNav.source}) ` +
         `привела на "${lastNav.url}", куда НИЧЕГО не инжектировалось (injectedFile: null). Если это произошло уже после ` +
         'клика по отклику — вот прямое доказательство того, что и куда увело расширение.',
+    );
+  }
+
+  const captchas = diagnosticLog.filter(
+    (entry) => entry.at >= runState.startedAt && entry.message === 'captcha shown, run paused until it is solved',
+  );
+  if (captchas.length > 0) {
+    const arrivedWithError = captchas.filter((entry) => entry.context?.includes('errorShown=true')).length;
+    lines.push(
+      `Капч за прогон: ${captchas.length}, из них появились уже с «Неверный текст»: ${arrivedWithError}. ` +
+        'Контекст каждой (номер в документе, возраст страницы, ключ картинки, клики и запросы перед появлением) — ' +
+        'в записях "captcha shown" / "captcha changed while up" / "captcha gone" в diagnostics.',
     );
   }
 
@@ -310,11 +345,12 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
 }
 
 async function handleDownloadDiagnostics() {
-  const [runState, settings, diagnosticLog, responseLog, navigationLog] = await Promise.all([
+  const [runState, runPause, settings, diagnosticLog, responseLog, navigationLog] = await Promise.all([
     getRunState(),
+    getRunPause(),
     getSettings(),
     getDiagnosticLog(),
-    getResponseLog(),
+    getResponseLog({ sinceMs: DIAGNOSTIC_RETENTION_MS }),
     getNavigationLog(),
   ]);
 
@@ -328,11 +364,15 @@ async function handleDownloadDiagnostics() {
     webAccessibleResources: chrome.runtime.getManifest().web_accessible_resources,
     diagnosis: buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog),
     runState,
+    runPause,
     activeTab,
     settings: { ...settings, apiKey: settings.apiKey ? '(задан)' : '(не задан)', legend: undefined },
-    recentResponses: responseLog.slice(-50),
-    recentDiagnostics: diagnosticLog.slice(-400),
-    recentNavigation: navigationLog.slice(-200),
+    // everything the journals hold — the retained day, or a bit more — not a
+    // sample of it; responses are read for the same window (that log itself reaches much further back)
+    retentionHours: DIAGNOSTIC_RETENTION_MS / 3600000,
+    responses: responseLog,
+    diagnostics: diagnosticLog,
+    navigation: navigationLog,
   };
 
   const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
@@ -438,6 +478,8 @@ export function initRunView() {
     modeAutoBtn: document.getElementById('modeAutoBtn'),
     modeAssistedBtn: document.getElementById('modeAssistedBtn'),
     modeHint: document.getElementById('modeHint'),
+    pauseCard: document.getElementById('pauseCard'),
+    pauseText: document.getElementById('pauseText'),
     approvalCard: document.getElementById('approvalCard'),
     approvalVacancy: document.getElementById('approvalVacancy'),
     approveSubmitBtn: document.getElementById('approveSubmitBtn'),

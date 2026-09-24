@@ -1,6 +1,9 @@
 import { initRunView, renderRunView } from './run-view.js';
 import { initAnalyticsView, renderAnalyticsView } from './analytics-view.js';
 import { initSettingsView } from './settings-view.js';
+import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
+
+installUncaughtErrorCapture('sidepanel');
 
 function initTabs() {
   const tabButtons = document.querySelectorAll('.tab-btn');
@@ -16,11 +19,17 @@ function initTabs() {
   });
 }
 
+// the logs are stored one key per hour (see journal.js). The diagnostic log's 'info' entries (the bulk of
+// it) never show in the feed — a change to it only matters when its newest entry is a warning or an error
+function isFeedRelevantChange(key, change) {
+  if (key.startsWith('hhaa_diagnosticLog:')) return change.newValue?.at(-1)?.level !== 'info';
+  if (key.startsWith('hhaa_responseLog:')) return true;
+  return key === 'hhaa_runState' || key === 'hhaa_runPause';
+}
+
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== 'local') return;
-  if (changes.hhaa_runState || changes.hhaa_responseLog || changes.hhaa_diagnosticLog) {
-    renderRunView();
-  }
+  if (Object.entries(changes).some(([key, change]) => isFeedRelevantChange(key, change))) renderRunView();
 });
 
 initTabs();
