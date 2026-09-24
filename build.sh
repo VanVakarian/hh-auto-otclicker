@@ -14,7 +14,8 @@ zip -r "$ZIP_PATH" . \
   -x "debug-htmls/*" \
   -x "plans/*" \
   -x "builds/*" \
+  -x "data/old/*" \
   -x ".git/*" \
-  -x ".DS_Store"
+  -x "*.DS_Store"
 
 echo "Built: $ZIP_PATH"

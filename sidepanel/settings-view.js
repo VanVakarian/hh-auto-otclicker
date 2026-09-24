@@ -60,7 +60,7 @@ async function handleExportAll(button, statusEl) {
 
     setDataTransferStatus(
       statusEl,
-      `Экспортировано разделов: ${Object.keys(payload.data).length}.`,
+      `Экспортировано разделов: ${Object.keys(payload.data).length}. Файл содержит API-ключ — не передавайте его другим.`,
       'success',
     );
     button.textContent = 'Экспортировано ✓';
@@ -122,13 +122,17 @@ async function handleImportFile(file, statusEl) {
   }
 
   try {
-    const importedKeys = await importFullState(payload);
+    const { imported, skipped, droppedEntries } = await importFullState(payload);
+    const problems = [
+      skipped.length > 0 && `Пропущены повреждённые разделы: ${skipped.join(', ')}.`,
+      droppedEntries > 0 && `Отброшено повреждённых записей: ${droppedEntries}.`,
+    ].filter(Boolean);
     setDataTransferStatus(
       statusEl,
-      `Импортировано разделов: ${importedKeys.length}. Перезагружаем панель…`,
-      'success',
+      [`Импортировано разделов: ${imported.length}.`, ...problems, 'Перезагружаем панель…'].join(' '),
+      problems.length > 0 ? 'error' : 'success',
     );
-    setTimeout(() => location.reload(), 1200);
+    setTimeout(() => location.reload(), problems.length > 0 ? 6000 : 1200); // long enough to read what was left out
   } catch (error) {
     reportError('settings', `import failed: ${error.message}`, stackOf(error));
     setDataTransferStatus(statusEl, `Ошибка импорта: ${error.message}`, 'error');
