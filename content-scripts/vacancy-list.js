@@ -20,8 +20,8 @@ import {
   haltOnContextInvalidated,
   onContextInvalidated,
 } from '../lib/extension-context.js';
+import { VACANCY_CARD_SELECTOR } from '../lib/hh-pages.js';
 
-const CARD_SELECTOR = '[data-qa="vacancy-serp__vacancy"]';
 const RESPONSE_BUTTON_SELECTOR = '[data-qa="vacancy-serp__vacancy_response"]';
 const TITLE_SELECTOR = '[data-qa="serp-item__title-text"]';
 const EMPLOYER_SELECTOR = '[data-qa="vacancy-serp__vacancy-employer-text"]';
@@ -67,7 +67,7 @@ function readCard(cardEl) {
 }
 
 function findResponseButtonByVacancyId(vacancyId) {
-  const cards = Array.from(document.querySelectorAll(CARD_SELECTOR));
+  const cards = Array.from(document.querySelectorAll(VACANCY_CARD_SELECTOR));
   for (const cardEl of cards) {
     const link = cardEl.querySelector(RESPONSE_BUTTON_SELECTOR);
     if (link && extractVacancyId(link.getAttribute('href') || '') === vacancyId) return link;
@@ -86,7 +86,7 @@ function isStillRespondable(vacancyId) {
 }
 
 async function pickNextCard(runState, settings) {
-  const cards = Array.from(document.querySelectorAll(CARD_SELECTOR));
+  const cards = Array.from(document.querySelectorAll(VACANCY_CARD_SELECTOR));
   const blacklistIds = new Set((await getQuestionnaireBlacklist()).map((e) => e.vacancyId));
   const companyLines = normalizeWordGroups(settings.blacklistCompaniesRaw);
   const titleStopWordLines = normalizeWordGroups(settings.vacancyTitleStopWordsRaw);
@@ -404,7 +404,7 @@ async function processNextCard() {
   // is then chosen from the settled DOM, not from one that may still be re-rendering.
   if (!(await sleepUnlessStopped(POST_RESPONSE_SETTLE_MS))) return;
 
-  const cardsOnPage = document.querySelectorAll(CARD_SELECTOR).length;
+  const cardsOnPage = document.querySelectorAll(VACANCY_CARD_SELECTOR).length;
   const card = await pickNextCard(runState, settings);
 
   if (!card) {
@@ -519,12 +519,12 @@ async function start() {
     console.log('📋 [list] starting scan');
     // first proof in the report that the module actually executed (as opposed to failing to load)
     await trace('entry loaded', `readyState=${document.readyState} url=${location.href}`);
-    await waitFor(() => document.querySelector(CARD_SELECTOR), { timeout: 8000, interval: 250 });
+    await waitFor(() => document.querySelector(VACANCY_CARD_SELECTOR), { timeout: 8000, interval: 250 });
 
-    const foundCards = document.querySelectorAll(CARD_SELECTOR).length;
+    const foundCards = document.querySelectorAll(VACANCY_CARD_SELECTOR).length;
     await trace('scan started', `url=${location.href} cardsFound=${foundCards}`);
 
-    if (!document.querySelector(CARD_SELECTOR)) {
+    if (!document.querySelector(VACANCY_CARD_SELECTOR)) {
       const message = 'Не нашли карточки вакансий на странице — возможно, изменилась вёрстка hh.ru';
       await reportError(
         'list',

@@ -16,12 +16,9 @@ import { getCaptchaPictures, deleteCaptchaPictures } from '../lib/captcha-store.
 import { createZip } from '../lib/zip.js';
 import { resultMeta, formatTime } from './format.js';
 import { reportError } from '../lib/diagnostics.js';
-
-// hh.ru redirects logged-in users to a regional subdomain (samara.hh.ru, spb.hh.ru, ...) instead of
-// keeping them on the bare hh.ru host, so every pattern here has to allow an optional subdomain.
-const LIST_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/search\/vacancy/;
-const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/applicant\/vacancy_response/;
-const HH_HOST_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\//;
+import { LIST_URL_PATTERN, QUESTIONNAIRE_URL_PATTERN, HH_HOST_PATTERN } from '../lib/hh-pages.js';
+import { getActiveTab, onActiveTabChange } from './active-tab.js';
+import { checkListPage, probeTabPage } from './list-page.js';
 
 const STATUS_LABELS = {
   idle: 'Ожидание',
@@ -36,6 +33,24 @@ const PAUSE_MESSAGES = {
 };
 
 let els = {};
+
+// Whether the active tab is a page a run can begin on (see checkListPage) — the Start button follows it.
+// Only Start's clicking is ever gated by this, never a run that is already going.
+const GUARD_RECHECK_MS = 2000;
+let startGuard = { ok: false, reason: '' };
+let guardCheckId = 0;
+let guardRecheckTimer = null;
+
+async function refreshStartGuard() {
+  clearTimeout(guardRecheckTimer);
+  const checkId = ++guardCheckId;
+  const guard = await checkListPage(await getActiveTab());
+  if (checkId !== guardCheckId) return; // a newer check has started meanwhile — its answer is the current one
+
+  startGuard = guard;
+  if (guard.waiting) guardRecheckTimer = setTimeout(refreshStartGuard, GUARD_RECHECK_MS);
+  await render();
+}
 
 function statusDotClass(status, isPaused) {
   if (isPaused) return 'paused';
@@ -141,12 +156,14 @@ async function render() {
 
   const isRunning = runState.status === 'running';
   els.startBtn.hidden = isRunning;
+  els.startBtn.disabled = !startGuard.ok;
   els.stopBtn.hidden = !isRunning;
 
-  els.startHint.textContent =
+  const llmHint =
     !settings.llmEnabled || !settings.apiKey?.trim()
       ? 'LLM выключен или не задан ключ — анкеты будут пропускаться и уходить в анкетный чёрный список.'
       : '';
+  els.startHint.textContent = [isRunning ? '' : startGuard.reason, llmHint].filter(Boolean).join(' ');
 
   const isAssisted = settings.mode === 'assisted';
   els.modeAutoBtn.classList.toggle('active', !isAssisted);
@@ -165,10 +182,12 @@ async function render() {
 }
 
 async function handleStart() {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-
-  if (!LIST_URL_PATTERN.test(tab?.url || '')) {
-    els.startHint.textContent = 'Откройте страницу поиска вакансий на hh.ru в активной вкладке и нажмите «Старт».';
+  // the button's state may be a moment old — what counts is the page as it is at the click
+  const tab = await getActiveTab();
+  const guard = await checkListPage(tab);
+  if (!guard.ok) {
+    startGuard = guard;
+    await render();
     return;
   }
 
@@ -224,24 +243,6 @@ async function getActiveTabSnapshot(tabId) {
     return { id: tab.id, url: tab.url, status: tab.status, title: tab.title, page: await probeTabPage(tabId) };
   } catch (error) {
     return { note: `chrome.tabs.get(${tabId}) failed: ${error.message}` };
-  }
-}
-
-// what the page itself looks like right now — answers "no cards / captcha / blank page" without
-// needing the content script to have run at all. The selector mirrors CARD_SELECTOR in vacancy-list.js.
-async function probeTabPage(tabId) {
-  try {
-    const [probe] = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: () => ({
-        readyState: document.readyState,
-        cards: document.querySelectorAll('[data-qa="vacancy-serp__vacancy"]').length,
-        bodyHead: document.body.innerText.slice(0, 200).replace(/\s+/g, ' '),
-      }),
-    });
-    return probe.result;
-  } catch (error) {
-    return { note: `page probe failed: ${error.message}` };
   }
 }
 
@@ -554,7 +555,9 @@ export function initRunView() {
 
   setupSelectionStopWordButton(els.eventFeed);
 
+  onActiveTabChange(refreshStartGuard);
   render();
+  refreshStartGuard();
 }
 
 export { render as renderRunView };

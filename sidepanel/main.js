@@ -1,6 +1,7 @@
 import { initRunView, renderRunView } from './run-view.js';
 import { initAnalyticsView, renderAnalyticsView } from './analytics-view.js';
 import { initSettingsView } from './settings-view.js';
+import { initSearchesView } from './searches-view.js';
 import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
 
 installUncaughtErrorCapture('sidepanel');
@@ -34,5 +35,6 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 initTabs();
 initRunView();
+initSearchesView();
 initAnalyticsView();
 initSettingsView();

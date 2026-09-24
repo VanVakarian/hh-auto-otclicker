@@ -10,6 +10,7 @@ import {
 } from './lib/storage.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from './lib/diagnostics.js';
 import { addCaptchaPicture } from './lib/captcha-store.js';
+import { LIST_URL_PATTERN, QUESTIONNAIRE_URL_PATTERN, CHAT_URL_PATTERN } from './lib/hh-pages.js';
 
 installUncaughtErrorCapture('background');
 
@@ -22,11 +23,17 @@ chrome.runtime.onInstalled.addListener(async () => {
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
 
-// hh.ru redirects logged-in users to a regional subdomain (samara.hh.ru, spb.hh.ru, ...) instead of
-// keeping them on the bare hh.ru host, so every pattern here has to allow an optional subdomain.
-const LIST_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/search\/vacancy/;
-const QUESTIONNAIRE_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/applicant\/vacancy_response/;
-const CHAT_URL_PATTERN = /^https:\/\/([a-z0-9-]+\.)?hh\.ru\/chat/;
+// What gets injected on which page. The `entry` drives the page for a run — if it can't load, a run can't
+// proceed there. `extras` don't take part in a run: their failing to load is reported but never stops one.
+const PAGE_SCRIPTS = [
+  {
+    pattern: LIST_URL_PATTERN,
+    entry: 'content-scripts/vacancy-list.js',
+    extras: ['content-scripts/search-tracker.js'],
+  },
+  { pattern: QUESTIONNAIRE_URL_PATTERN, entry: 'content-scripts/vacancy-questionnaire.js', extras: [] },
+  { pattern: CHAT_URL_PATTERN, entry: 'content-scripts/chat-tools.js', extras: [] },
+];
 
 // A hard (non-SPA) navigation kills a content script's JS context outright the instant it commits —
 // no error, no catch, whatever was mid-`await` just stops existing. That means self-recovery code
@@ -84,18 +91,47 @@ async function recoverStrayTab(tabId, url) {
 }
 
 // a script that never loaded can't report anything itself, so the failure is surfaced from here:
-// into the diagnostic log (and the sidepanel feed) always, and as a run error when this is the tab
-// the run is driving — the run can't proceed on a page whose entry script isn't running
-async function failRunOnInjectionError(tabId, file, url, injectionError) {
+// into the diagnostic log (and the sidepanel feed) always, and — for an entry — as a run error when this
+// is the tab the run is driving: the run can't proceed on a page whose entry script isn't running
+async function reportInjectionFailure(tabId, file, url, injectionError, { isEntry }) {
   await reportError(
     'background',
     `injection of ${file} failed`,
     `tabId=${tabId} url=${url} error=${injectionError} extensionUrl=${chrome.runtime.getURL('')}`,
   );
 
+  if (!isEntry) return;
+
   const runState = await getRunState();
   if (runState.status === 'running' && runState.tabId === tabId) {
     await saveRunState({ status: 'error', lastError: `Не удалось загрузить ${file}: ${injectionError}` });
+  }
+}
+
+// entries are ES modules sharing code with the rest of the extension — a content script can't be
+// one directly, so a one-line stub imports it. A module runs once per document, which is also
+// what makes the two racing injections (onCompleted + onHistoryStateUpdated) harmless.
+// executeScript resolves fine even when the import inside the stub rejects (blocked resource,
+// module top-level throw) — the stub has to hand the failure back as its result, otherwise
+// the run just sits on "running" with a page nobody is driving.
+// Resolves to the failure's description, or null when the module loaded.
+async function injectModule(tabId, file) {
+  try {
+    const [injection] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: async (path) => {
+        try {
+          await import(chrome.runtime.getURL(path));
+          return null;
+        } catch (error) {
+          return `${error.name}: ${error.message}`;
+        }
+      },
+      args: [file],
+    });
+    return injection?.result ?? null;
+  } catch (error) {
+    return error.message;
   }
 }
 
@@ -110,43 +146,21 @@ async function failRunOnInjectionError(tabId, file, url, injectionError) {
 async function injectForNavigation({ tabId, url, frameId }, source) {
   if (frameId !== 0) return;
 
-  let file = null;
-  if (LIST_URL_PATTERN.test(url)) file = 'content-scripts/vacancy-list.js';
-  else if (QUESTIONNAIRE_URL_PATTERN.test(url)) file = 'content-scripts/vacancy-questionnaire.js';
-  else if (CHAT_URL_PATTERN.test(url)) file = 'content-scripts/chat-tools.js';
-
-  let injectionError = null;
-  if (file) {
-    try {
-      // entries are ES modules sharing code with the rest of the extension — a content script can't be
-      // one directly, so a one-line stub imports it. A module runs once per document, which is also
-      // what makes the two racing injections (onCompleted + onHistoryStateUpdated) harmless.
-      // executeScript resolves fine even when the import inside the stub rejects (blocked resource,
-      // module top-level throw) — the stub has to hand the failure back as its result, otherwise
-      // the run just sits on "running" with a page nobody is driving
-      const [injection] = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: async (path) => {
-          try {
-            await import(chrome.runtime.getURL(path));
-            return null;
-          } catch (error) {
-            return `${error.name}: ${error.message}`;
-          }
-        },
-        args: [file],
-      });
-      injectionError = injection?.result ?? null;
-    } catch (error) {
-      injectionError = error.message;
-    }
+  const page = PAGE_SCRIPTS.find(({ pattern }) => pattern.test(url));
+  if (!page) {
+    await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: null, injectionError: null });
+    await recoverStrayTab(tabId, url);
+    return;
   }
 
-  await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: file, injectionError });
-
-  if (injectionError) await failRunOnInjectionError(tabId, file, url, injectionError);
-
-  if (!file) await recoverStrayTab(tabId, url);
+  // the entry goes first, and each file is logged on its own
+  for (const file of [page.entry, ...page.extras]) {
+    const injectionError = await injectModule(tabId, file);
+    await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: file, injectionError });
+    if (injectionError) {
+      await reportInjectionFailure(tabId, file, url, injectionError, { isEntry: file === page.entry });
+    }
+  }
 }
 
 const HH_RU_FILTER = { url: [{ hostEquals: 'hh.ru' }, { hostSuffix: '.hh.ru' }] };
