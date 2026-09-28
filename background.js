@@ -6,11 +6,20 @@ import {
   getRunPause,
   maintainJournals,
   saveRunState,
+  saveRunPause,
+  PauseReason,
   addResponseLogEntry,
 } from './lib/storage.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from './lib/diagnostics.js';
 import { addCaptchaPicture } from './lib/captcha-store.js';
-import { LIST_URL_PATTERN, QUESTIONNAIRE_URL_PATTERN, CHAT_URL_PATTERN } from './lib/hh-pages.js';
+import { reactionDelayMs } from './lib/pacing.js';
+import {
+  LIST_URL_PATTERN,
+  QUESTIONNAIRE_URL_PATTERN,
+  CHAT_URL_PATTERN,
+  CAPTCHA_PICTURE_SELECTOR,
+  CAPTCHA_INPUT_SELECTOR,
+} from './lib/hh-pages.js';
 
 installUncaughtErrorCapture('background');
 
@@ -48,15 +57,88 @@ const PAGE_SCRIPTS = [
 // state that needs to survive a worker restart.
 const recoveringTabs = new Set();
 
+// the run state if the run is going and this tab, sitting on `url`, is a stray one — null otherwise
+async function strayRunState(tabId, url) {
+  const runState = await getRunState();
+  if (runState.status !== 'running' || runState.tabId !== tabId || !runState.listUrl) return null;
+  if (url === runState.listUrl) return null;
+  return runState;
+}
+
+async function tabUrlOf(tabId) {
+  try {
+    return (await chrome.tabs.get(tabId)).url;
+  } catch {
+    return null; // the tab is gone
+  }
+}
+
+// A stray page has no script of ours, so a captcha on it holds nothing — this looks for one from outside.
+async function isCaptchaOnTab(tabId) {
+  try {
+    const [probe] = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: (selectors) =>
+        selectors.some((selector) => document.querySelector(selector)?.getBoundingClientRect().height > 0),
+      args: [[CAPTCHA_PICTURE_SELECTOR, CAPTCHA_INPUT_SELECTOR]],
+    });
+    return Boolean(probe?.result);
+  } catch {
+    return false; // closed or not scriptable: nothing there to wait for
+  }
+}
+
+const CAPTCHA_POLL_MS = 1000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// The way back to the list is a navigation like any other and never happens under a captcha: the run
+// waits here (shown as paused, like a captcha the in-page watcher holds) until the person has solved it.
+// Resolves to whether the recovery is still wanted — false when the run was stopped or the tab went
+// somewhere else on its own meanwhile (the person solved the captcha and hh.ru moved on).
+async function waitOutCaptcha(tabId, url) {
+  if (!(await isCaptchaOnTab(tabId))) return true;
+
+  const tabUrl = await tabUrlOf(tabId);
+  await reportWarning(
+    'background',
+    'captcha on a page without the bot, return to list waits until it is solved',
+    `url=${url} tabId=${tabId}`,
+  );
+  await saveRunPause([PauseReason.CAPTCHA]);
+
+  const stillWanted = async () => Boolean(await strayRunState(tabId, url)) && (await tabUrlOf(tabId)) === tabUrl;
+
+  for (;;) {
+    await sleep(CAPTCHA_POLL_MS);
+    if (!(await stillWanted())) return false;
+    if (await isCaptchaOnTab(tabId)) continue;
+
+    // a solved captcha leaves through an animation and a wrong answer brings a new one — the page has
+    // to stay clear for a human-sized beat before the bot moves
+    await sleep(reactionDelayMs());
+    if (!(await stillWanted())) return false;
+    if (!(await isCaptchaOnTab(tabId))) break;
+  }
+
+  await saveRunPause([]);
+  return true;
+}
+
 async function recoverStrayTab(tabId, url) {
   if (recoveringTabs.has(tabId)) return;
+  if (!(await strayRunState(tabId, url))) return;
 
-  const runState = await getRunState();
-  if (runState.status !== 'running' || runState.tabId !== tabId || !runState.listUrl) return;
-  if (url === runState.listUrl) return;
-
+  // the debounce window opens when the wait ends, not when it starts — a captcha can take minutes
   recoveringTabs.add(tabId);
-  setTimeout(() => recoveringTabs.delete(tabId), 5000);
+  let wanted;
+  try {
+    wanted = await waitOutCaptcha(tabId, url);
+  } finally {
+    setTimeout(() => recoveringTabs.delete(tabId), 5000);
+  }
+  if (!wanted) return;
+  const runState = await strayRunState(tabId, url);
+  if (!runState) return;
 
   await reportWarning(
     'background',

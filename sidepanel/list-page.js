@@ -1,4 +1,4 @@
-import { LIST_URL_PATTERN, VACANCY_CARD_SELECTOR } from '../lib/hh-pages.js';
+import { LIST_URL_PATTERN, VACANCY_CARD_SELECTOR, PAGER_SELECTOR } from '../lib/hh-pages.js';
 
 // What the page of a tab looks like right now — answers "no cards / captcha / blank page" without needing
 // a content script to have run there at all. Best-effort: the tab may have been closed, or the extension
@@ -7,12 +7,15 @@ export async function probeTabPage(tabId) {
   try {
     const [probe] = await chrome.scripting.executeScript({
       target: { tabId },
-      func: (cardSelector) => ({
+      func: (cardSelector, pagerSelector) => ({
         readyState: document.readyState,
         cards: document.querySelectorAll(cardSelector).length,
+        pager: Array.from(document.querySelectorAll(pagerSelector), (el) => el.getAttribute('data-qa')),
+        scrollY: Math.round(window.scrollY),
+        pageHeight: document.documentElement.scrollHeight,
         bodyHead: document.body.innerText.slice(0, 200).replace(/\s+/g, ' '),
       }),
-      args: [VACANCY_CARD_SELECTOR],
+      args: [VACANCY_CARD_SELECTOR, PAGER_SELECTOR],
     });
     return probe.result;
   } catch (error) {

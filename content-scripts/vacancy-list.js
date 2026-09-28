@@ -7,12 +7,13 @@ import {
   addResponseLogEntry,
   addTraceEntry,
   getRespondedTodayCount,
+  StopReason,
 } from '../lib/storage.js';
 import { waitFor, isVisible } from '../lib/dom.js';
 import { normalizeWordGroups, matchesWordGroups } from '../lib/matching.js';
 import { randomDelayMs, reactionDelayMs } from '../lib/pacing.js';
 import { sleepUnlessStopped, humanPause, isRunStoppedError } from '../lib/run-control.js';
-import { click, scrollToElement, fillText } from '../lib/interaction.js';
+import { click, scrollToElement, scrollToPageBottom, fillText, navigate } from '../lib/interaction.js';
 import { startPageWatchers } from '../lib/page-watchers.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import {
@@ -20,12 +21,19 @@ import {
   haltOnContextInvalidated,
   onContextInvalidated,
 } from '../lib/extension-context.js';
-import { VACANCY_CARD_SELECTOR } from '../lib/hh-pages.js';
+import { VACANCY_CARD_SELECTOR, NEXT_PAGE_SELECTOR, PAGER_SELECTOR } from '../lib/hh-pages.js';
 
 const RESPONSE_BUTTON_SELECTOR = '[data-qa="vacancy-serp__vacancy_response"]';
 const TITLE_SELECTOR = '[data-qa="serp-item__title-text"]';
 const EMPLOYER_SELECTOR = '[data-qa="vacancy-serp__vacancy-employer-text"]';
-const NEXT_PAGE_SELECTOR = '[data-qa="pager-next"]';
+
+// hh.ru renders a result page in stages — the first vacancies show up, the rest of them and the pager
+// only later or once the page is scrolled to its end. "Nothing left to respond to and no next-page
+// link" is therefore not a verdict until the end of the page has been visited and given this long
+// to produce either more vacancies or the link.
+const PAGE_END_ATTEMPTS = 3;
+const PAGE_END_WAIT_MS = 3000;
+const PAGER_DUMP_LIMIT = 12;
 
 // in-page "Отклик на вакансию" popup — hh.ru shows this instead of navigating when the only
 // extra requirement is a cover letter (no screening questions)
@@ -177,7 +185,7 @@ async function recoverFromStrayNavigation(card, listUrl, source) {
   // replace, not a normal navigation — this is undoing an unwanted detour, not a step the user
   // took on purpose, so it shouldn't leave the stray page sitting in browser history either
   // (otherwise the back button would land right back on it instead of the real previous page)
-  location.replace(listUrl);
+  await navigate(listUrl, { replace: true });
 }
 
 async function waitForClickOutcome(vacancyId) {
@@ -366,6 +374,55 @@ async function handleResponseModal(card) {
   console.log(`📋 [list] responded via popup to "${card.title}"`);
 }
 
+const countCards = () => document.querySelectorAll(VACANCY_CARD_SELECTOR).length;
+
+function pageParamOf(href) {
+  return new URL(href, location.origin).searchParams.get('page');
+}
+
+// One line with everything needed to judge afterwards why the bot considered the page finished: how far
+// the list had rendered, what the pager held (hh.ru's own names first, then every link to any page in
+// case they were renamed), where the page was scrolled to and how old the document was.
+function describePage(processedCount) {
+  const cards = Array.from(document.querySelectorAll(VACANCY_CARD_SELECTOR));
+  const withButton = cards.filter((cardEl) => cardEl.querySelector(RESPONSE_BUTTON_SELECTOR)).length;
+  const pager = Array.from(document.querySelectorAll(PAGER_SELECTOR))
+    .slice(0, PAGER_DUMP_LIMIT)
+    .map((el) => {
+      const page = el.href ? `>page=${pageParamOf(el.href)}` : '';
+      return `${el.getAttribute('data-qa')}${page}"${el.textContent.trim().slice(0, 12)}"`;
+    });
+  const pageLinks = new Set(Array.from(document.querySelectorAll('a[href*="page="]')).map((a) => pageParamOf(a.href)));
+  const { scrollY, innerHeight } = window;
+
+  return (
+    `cards=${cards.length} withResponseButton=${withButton} processed=${processedCount} ` +
+    `pager=[${pager.join(' ')}] pageLinks=[${[...pageLinks].join(',')}] ` +
+    `scrollY=${Math.round(scrollY)} viewportH=${innerHeight} pageH=${document.documentElement.scrollHeight} ` +
+    `sinceLoadMs=${Math.round(performance.now())} readyState=${document.readyState} title="${document.title.slice(0, 60)}"`
+  );
+}
+
+// Visits the end of the page and waits there for whatever hh.ru still has to render — the next-page
+// link or more vacancies — so the caller judges a finished page, not a half-drawn one.
+async function waitForPageEnd(cardsBefore) {
+  const hasNextPageLink = () => Boolean(document.querySelector(NEXT_PAGE_SELECTOR));
+  const hasMoved = () => hasNextPageLink() || countCards() > cardsBefore;
+  if (hasMoved()) return;
+
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < PAGE_END_ATTEMPTS && !hasMoved(); attempt++) {
+    await scrollToPageBottom();
+    await waitFor(hasMoved, { timeout: PAGE_END_WAIT_MS, interval: 250 });
+  }
+
+  const outcome = hasNextPageLink() ? 'next_page_appeared' : hasMoved() ? 'more_cards_appeared' : 'nothing_appeared';
+  await trace(
+    'waited at the end of the page',
+    `outcome=${outcome} waitedMs=${Date.now() - startedAt} cards=${cardsBefore}->${countCards()}`,
+  );
+}
+
 async function processNextCard() {
   const runState = await getRunState();
   if (runState.status !== 'running') return;
@@ -380,7 +437,7 @@ async function processNextCard() {
       `url=${location.href} listUrl=${runState.listUrl}`,
     );
     if (runState.listUrl) {
-      location.replace(runState.listUrl); // replace, same back-button reasoning as recoverFromStrayNavigation
+      await navigate(runState.listUrl, { replace: true }); // same back-button reasoning as recoverFromStrayNavigation
     } else {
       await saveRunState({ status: 'error', lastError: 'off the list page with no listUrl to recover to' });
     }
@@ -394,7 +451,7 @@ async function processNextCard() {
   if (respondedToday >= dailyLimit) {
     console.log(`📋 [list] daily limit reached (${dailyLimit}), stopping`);
     await trace('daily limit reached, stopping', `respondedToday=${respondedToday} dailyLimit=${dailyLimit}`);
-    await saveRunState({ status: 'stopped' });
+    await saveRunState({ status: 'stopped', stopReason: StopReason.DAILY_LIMIT });
     return;
   }
 
@@ -404,15 +461,28 @@ async function processNextCard() {
   // is then chosen from the settled DOM, not from one that may still be re-rendering.
   if (!(await sleepUnlessStopped(POST_RESPONSE_SETTLE_MS))) return;
 
-  const cardsOnPage = document.querySelectorAll(VACANCY_CARD_SELECTOR).length;
+  const cardsOnPage = countCards();
   const card = await pickNextCard(runState, settings);
 
   if (!card) {
+    await waitForPageEnd(cardsOnPage);
+    if (countCards() > cardsOnPage) {
+      await processNextCard(); // vacancies that hh.ru rendered while we waited
+      return;
+    }
+
+    // a Stop pressed during the wait stays a plain Stop, not a "no more vacancies" verdict
+    const currentRunState = await getRunState();
+    if (currentRunState.status !== 'running') return;
+
     const nextPageLink = document.querySelector(NEXT_PAGE_SELECTOR);
     if (!nextPageLink) {
       console.log('📋 [list] no more vacancies and no next page, stopping');
-      await trace('no pickable card and no next-page link, stopping', `cardsOnPage=${cardsOnPage}`);
-      await saveRunState({ status: 'stopped' });
+      await trace(
+        'no pickable card and no next-page link, stopping',
+        describePage(currentRunState.processedVacancyIds.length),
+      );
+      await saveRunState({ status: 'stopped', stopReason: StopReason.NO_MORE_VACANCIES });
       return;
     }
     if (!(await sleepUnlessStopped(randomDelayMs(settings.delayMinSec, settings.delayMaxSec)))) return;
@@ -420,7 +490,7 @@ async function processNextCard() {
     console.log('📋 [list] page exhausted, moving to next page');
     await trace('page exhausted, moving to next page', `nextUrl=${nextUrl}`);
     await saveRunState({ listUrl: nextUrl, processedVacancyIds: [] });
-    location.href = nextUrl;
+    await navigate(nextUrl);
     return;
   }
 
@@ -474,7 +544,7 @@ async function processNextCard() {
       await processNextCard();
     } else {
       await trace('response popup handled off the list, returning', `vacancyId=${card.vacancyId}`);
-      location.replace(listUrl);
+      await navigate(listUrl, { replace: true });
     }
     return;
   }
@@ -521,8 +591,7 @@ async function start() {
     await trace('entry loaded', `readyState=${document.readyState} url=${location.href}`);
     await waitFor(() => document.querySelector(VACANCY_CARD_SELECTOR), { timeout: 8000, interval: 250 });
 
-    const foundCards = document.querySelectorAll(VACANCY_CARD_SELECTOR).length;
-    await trace('scan started', `url=${location.href} cardsFound=${foundCards}`);
+    await trace('scan started', `url=${location.href} ${describePage(runState.processedVacancyIds.length)}`);
 
     if (!document.querySelector(VACANCY_CARD_SELECTOR)) {
       const message = 'Не нашли карточки вакансий на странице — возможно, изменилась вёрстка hh.ru';

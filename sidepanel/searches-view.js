@@ -62,6 +62,23 @@ function renderGroup(title, searches, options) {
   return [element('div', 'search-group-title', title), renderList(searches, options)];
 }
 
+// The list is rebuilt from scratch on every change, so whether the history is unfolded lives here, not in
+// the DOM. Folded by default.
+let isHistoryOpen = false;
+
+function renderHistoryGroup(searches, options) {
+  const details = element('details', 'search-history');
+  details.open = isHistoryOpen;
+  details.addEventListener('toggle', () => {
+    isHistoryOpen = details.open;
+  });
+  details.append(
+    element('summary', 'search-group-title search-group-title_toggle', 'Недавние'),
+    renderList(searches, options),
+  );
+  return [details];
+}
+
 function queryOfListUrl(url) {
   return url && LIST_URL_PATTERN.test(url) ? searchQueryOf(url) : null;
 }
@@ -88,7 +105,7 @@ async function render() {
 
   els.list.replaceChildren(
     ...(pinned.length > 0 ? renderGroup('Закреплённые', pinned, options) : []),
-    ...(history.length > 0 ? renderGroup('Недавние', history, options) : []),
+    ...(history.length > 0 ? renderHistoryGroup(history, options) : []),
   );
   els.empty.hidden = searches.length > 0;
   els.card.hidden = false;

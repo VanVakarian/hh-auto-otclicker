@@ -222,6 +222,17 @@ body {
   line-height: 1.4;
 }
 
+.status-note {
+  margin-top: 10px;
+  padding: 9px 11px;
+  background: #f5f1f2;
+  border-left: 3px solid var(--text-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
 .data-transfer-status {
   margin-top: 10px;
   padding: 9px 11px;
@@ -333,6 +344,40 @@ body {
 
 .search-group-title:first-child {
   margin-top: 0;
+}
+
+.search-history {
+  margin-top: 12px;
+}
+
+.search-history:first-child {
+  margin-top: 0;
+}
+
+.search-group-title_toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.search-group-title_toggle::-webkit-details-marker {
+  display: none;
+}
+
+.search-group-title_toggle::after {
+  content: '▸';
+  transition: transform 0.15s ease;
+}
+
+.search-history[open] > .search-group-title_toggle::after {
+  transform: rotate(90deg);
+}
+
+.search-history:not([open]) > .search-group-title_toggle {
+  margin-bottom: 0;
 }
 
 .search-list {

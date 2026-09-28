@@ -6,6 +6,7 @@ import {
   getRunPause,
   saveRunState,
   startRun,
+  StopReason,
   getResponseLog,
   getDiagnosticLog,
   getNavigationLog,
@@ -25,6 +26,14 @@ const STATUS_LABELS = {
   running: 'Работает',
   stopped: 'Остановлено',
   error: 'Ошибка',
+};
+
+// a run that ended by itself — what to tell the user instead of a silent "Остановлено"
+const STOP_MESSAGES = {
+  [StopReason.NO_MORE_VACANCIES]:
+    'Подходящие вакансии закончились: на странице не осталось карточек для отклика, а кнопки следующей страницы нет даже после прокрутки до конца.',
+  [StopReason.DAILY_LIMIT]: 'Достигнут дневной лимит откликов из настроек.',
+  [StopReason.HH_DAILY_LIMIT]: 'hh.ru отказал в отклике: исчерпан его лимит (200 откликов за 24 часа).',
 };
 
 // "running" that stands still until a human clears something on the page — what to tell them to do
@@ -144,6 +153,10 @@ async function render() {
   } else {
     els.statusError.hidden = true;
   }
+
+  const stopMessage = runState.status === 'stopped' ? STOP_MESSAGES[runState.stopReason] : null;
+  els.statusNote.hidden = !stopMessage;
+  if (stopMessage) els.statusNote.textContent = stopMessage;
 
   els.dailyCounter.textContent = String(respondedToday);
 
@@ -308,6 +321,14 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
   } else if (runState.status === 'running' && !activeTab?.url) {
     lines.push(
       'СТОП: статус "running", но не удалось прочитать URL вкладки — см. activeTab.note ниже (вкладка закрыта?).',
+    );
+  }
+
+  if (runState.status === 'stopped' && runState.stopReason) {
+    lines.push(
+      `Прогон остановился сам (stopReason=${runState.stopReason}), не пользователем. Для "no_more_vacancies" ` +
+        'состояние страницы в момент решения (карточки, пейджер, прокрутка) — в diagnostics, записи ' +
+        '"waited at the end of the page" и "no pickable card and no next-page link, stopping".',
     );
   }
 
@@ -525,6 +546,7 @@ export function initRunView() {
     statusDot: document.getElementById('statusDot'),
     statusText: document.getElementById('statusText'),
     statusError: document.getElementById('statusError'),
+    statusNote: document.getElementById('statusNote'),
     dailyCounter: document.getElementById('dailyCounter'),
     currentVacancy: document.getElementById('currentVacancy'),
     startBtn: document.getElementById('startBtn'),

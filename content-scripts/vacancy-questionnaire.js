@@ -10,9 +10,9 @@ import {
 } from '../lib/storage.js';
 import { waitFor, isVisible } from '../lib/dom.js';
 import { normalizeStopWords, matchStopWord } from '../lib/matching.js';
-import { randomDelayMs } from '../lib/pacing.js';
+import { randomDelayMs, reactionDelayMs } from '../lib/pacing.js';
 import { sleepUnlessStopped, isRunStoppedError } from '../lib/run-control.js';
-import { click, fillText } from '../lib/interaction.js';
+import { click, fillText, navigate } from '../lib/interaction.js';
 import { startPageWatchers } from '../lib/page-watchers.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import {
@@ -259,7 +259,7 @@ async function finishAndReturn({ vacancyId, listUrl }) {
   // replace, not a normal navigation — otherwise this questionnaire page (already submitted or
   // skipped, a dead end either way) stays in browser history and the back button lands on it
   // instead of the list page the user actually came from
-  location.replace(listUrl);
+  await navigate(listUrl, { replace: true });
 }
 
 const SKIP_REASON_RESULTS = {
@@ -285,7 +285,7 @@ async function skipQuestionnaire({ vacancyId, title, company, listUrl, reason })
 }
 
 // manual escape hatch, independent of run()'s own state machine: a real navigation
-// (finishAndReturn -> location.replace) kills this document's JS context outright, so whatever
+// (finishAndReturn -> navigate) kills this document's JS context outright, so whatever
 // run() was doing (mid-LLM-call, waiting on approval, whatever) simply stops existing — no
 // coordination with run() needed beyond that
 function injectSkipButton({ vacancyId, title, company, listUrl }) {
@@ -303,7 +303,10 @@ function injectSkipButton({ vacancyId, title, company, listUrl }) {
   skipButton.addEventListener('click', () => {
     skipButton.disabled = true;
     skipButton.textContent = 'Пропускаем…';
-    skipQuestionnaire({ vacancyId, title, company, listUrl, reason: 'manual_skip' });
+    skipQuestionnaire({ vacancyId, title, company, listUrl, reason: 'manual_skip' }).catch((error) => {
+      // Stop pressed while the run was held (a captcha on screen): the page stays as it is
+      if (!isRunStoppedError(error)) throw error;
+    });
   });
 
   submitButton.parentElement.appendChild(skipButton);
@@ -543,6 +546,11 @@ async function run() {
     });
     console.log(`📝 [questionnaire] submitted "${title}"`);
 
+    // A person looks at what the submit did before leaving. hh.ru answers a submit with a captcha a
+    // moment after the form goes quiet — this beat is when that shows up, so the way back to the list
+    // is never taken in the instant before it does. (The hold ends the pause at once: nothing moves
+    // under a captcha.)
+    if (!(await sleepUnlessStopped(reactionDelayMs()))) return;
     await finishAndReturn({ vacancyId, listUrl });
   } catch (error) {
     if (isContextInvalidatedError(error)) {
