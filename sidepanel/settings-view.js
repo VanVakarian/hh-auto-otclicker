@@ -7,11 +7,15 @@ import {
   importFullState,
 } from '../lib/storage.js';
 import { reportError, stackOf } from '../lib/diagnostics.js';
+import { DEFAULT_CAPTCHA_MODEL } from '../lib/captcha-solver.js';
+import { runSolverSelfTest } from '../lib/captcha-selftest.js';
 
 const FIELD_MAP = [
   { id: 'llmEnabled', key: 'llmEnabled', kind: 'checkbox' },
   { id: 'apiKey', key: 'apiKey', kind: 'text' },
   { id: 'llmModels', key: 'llmModelsRaw', kind: 'text' },
+  { id: 'captchaSolveEnabled', key: 'captchaSolveEnabled', kind: 'checkbox' },
+  { id: 'captchaModel', key: 'captchaModel', kind: 'text' },
   { id: 'legend', key: 'legend', kind: 'text' },
   { id: 'stylePrompt', key: 'stylePrompt', kind: 'text' },
   { id: 'dailyLimit', key: 'dailyLimit', kind: 'number' },
@@ -139,6 +143,48 @@ async function handleImportFile(file, statusEl) {
   }
 }
 
+// what the self-test found, in words for the person: the call itself failing means the key, the balance or
+// the model is at fault; a reading that differs from the drawing is only a note, the drawing is simplified
+function describeSolverTest(result) {
+  if (!result.ok) {
+    const advice =
+      result.kind === 'unavailable' ? ' Проверьте API-ключ, баланс OpenRouter и что модель принимает изображения.' : '';
+    return { text: `Не работает: ${result.error}.${advice}`, kind: 'error' };
+  }
+
+  const seconds = (result.ms / 1000).toFixed(1);
+  const price = result.cost === null ? 'стоимость не указана' : `$${result.cost.toFixed(5)}`;
+  if (result.matched) {
+    return { text: `Работает: ${result.model} прочитала «${result.answer}» за ${seconds} с, ${price}.`, kind: 'success' };
+  }
+  return {
+    text:
+      `Модель ответила, но прочитала «${result.answer}» вместо «${result.expected}» (${result.model}, ${seconds} с, ${price}). ` +
+      'Пробная картинка проще настоящей: ключ и модель работают, а качество на живых капчах покажет журнал диагностики.',
+    kind: null,
+  };
+}
+
+async function handleCaptchaTest(button, statusEl) {
+  const settings = await getSettings();
+  if (!settings.apiKey.trim()) {
+    setDataTransferStatus(statusEl, 'Сначала введите API-ключ.', 'error');
+    return;
+  }
+
+  button.disabled = true;
+  setDataTransferStatus(statusEl, 'Проверяем…', null);
+  try {
+    const { text, kind } = describeSolverTest(await runSolverSelfTest(settings));
+    setDataTransferStatus(statusEl, text, kind);
+  } catch (error) {
+    reportError('settings', `captcha solver self-test failed: ${error.message}`, stackOf(error));
+    setDataTransferStatus(statusEl, `Проверка не удалась: ${error.message}`, 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function setupDataTransfer() {
   const exportBtn = document.getElementById('exportAllBtn');
   const importBtn = document.getElementById('importAllBtn');
@@ -172,10 +218,14 @@ export async function initSettingsView() {
     });
   });
 
+  document.getElementById('captchaModel').placeholder = `Пусто — по умолчанию используется ${DEFAULT_CAPTCHA_MODEL}`;
+
   const llmEnabledEl = document.getElementById('llmEnabled');
+  const captchaSolveEnabledEl = document.getElementById('captchaSolveEnabled');
   const apiKeyEl = document.getElementById('apiKey');
   const syncLlmEnabledAvailability = () => {
     llmEnabledEl.disabled = !apiKeyEl.value.trim();
+    captchaSolveEnabledEl.disabled = !apiKeyEl.value.trim();
   };
   apiKeyEl.addEventListener('input', syncLlmEnabledAvailability);
   syncLlmEnabledAvailability();
@@ -184,6 +234,10 @@ export async function initSettingsView() {
     await clearQuestionnaireBlacklist();
     await renderBlacklistCount();
   });
+
+  const captchaTestBtn = document.getElementById('captchaTestBtn');
+  const captchaTestStatus = document.getElementById('captchaTestStatus');
+  captchaTestBtn.addEventListener('click', () => handleCaptchaTest(captchaTestBtn, captchaTestStatus));
 
   setupDataTransfer();
 

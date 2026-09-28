@@ -61,7 +61,8 @@
     <div class="card pause-card"
          id="pauseCard"
          hidden>
-      <h2 class="card-title">Пауза — нужна ваша помощь</h2>
+      <h2 class="card-title"
+          id="pauseTitle">Пауза — нужна ваша помощь</h2>
       <div class="hint"
            id="pauseText"></div>
     </div>
@@ -207,6 +208,34 @@
                   placeholder="Пусто — используются модели по умолчанию.&#10;Например:&#10;qwen/qwen3-coder&#10;deepseek/deepseek-chat-v3.1"></textarea>
         <div class="hint">Пробуются по очереди сверху вниз, пока одна не вернёт валидный ответ.</div>
       </div>
+    </div>
+
+    <div class="card">
+      <div class="form-group form-group_toggle">
+        <label class="form-label"
+               for="captchaSolveEnabled">Решать капчу автоматически</label>
+        <input type="checkbox"
+               id="captchaSolveEnabled">
+      </div>
+      <div class="hint">Картинка отправляется в модель по API-ключу OpenRouter из настроек выше; ответ вводится и отправляется сам. Не вышло с нескольких попыток — капчу нужно ввести вручную. Выключено — работа всегда ждёт, пока вы введёте капчу сами.</div>
+
+      <div class="form-group">
+        <label for="captchaModel"
+               class="form-label">Модель для капчи (необязательно)</label>
+        <input type="text"
+               id="captchaModel"
+               class="form-input"
+               spellcheck="false">
+        <div class="hint">Нужна модель, принимающая изображения.</div>
+      </div>
+
+      <button type="button"
+              id="captchaTestBtn"
+              class="submit-btn submit-btn_secondary">Проверить распознавание</button>
+      <div class="hint">Рисует пробную капчу и прогоняет её через модель — проверяет ключ, баланс и модель, не дожидаясь настоящей капчи. Стоит доли цента.</div>
+      <div class="data-transfer-status"
+           id="captchaTestStatus"
+           hidden></div>
     </div>
 
     <div class="card">

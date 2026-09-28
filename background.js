@@ -1,7 +1,9 @@
 import { generateAnswers, generateChatReply } from './lib/llm.js';
+import { solveCaptcha } from './lib/captcha-solver.js';
 import {
   KEYS,
   addNavigationLogEntry,
+  addTraceEntry,
   getRunState,
   getRunPause,
   maintainJournals,
@@ -89,6 +91,7 @@ async function isCaptchaOnTab(tabId) {
 }
 
 const CAPTCHA_POLL_MS = 1000;
+const CAPTCHA_GUARD_FILE = 'content-scripts/captcha-guard.js';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The way back to the list is a navigation like any other and never happens under a captcha: the run
@@ -106,21 +109,44 @@ async function waitOutCaptcha(tabId, url) {
   );
   await saveRunPause([PauseReason.CAPTCHA]);
 
+  // nothing of ours runs on this page, so nothing on it could answer the captcha — the guard is added
+  // for that; if it can't load, the captcha is left to a person, as before
+  const waitStartedAt = Date.now();
+  const guardError = await injectModule(tabId, CAPTCHA_GUARD_FILE);
+  if (guardError) {
+    await reportError('background', `injection of ${CAPTCHA_GUARD_FILE} failed`, `tabId=${tabId} error=${guardError}`);
+  } else {
+    await addTraceEntry('background', 'captcha guard injected on a page without the bot', `tabId=${tabId} url=${url}`);
+  }
+
   const stillWanted = async () => Boolean(await strayRunState(tabId, url)) && (await tabUrlOf(tabId)) === tabUrl;
+  const ended = (outcome) =>
+    addTraceEntry(
+      'background',
+      'captcha wait on a page without the bot ended',
+      `${outcome} waitedMs=${Date.now() - waitStartedAt} tabId=${tabId}`,
+    );
 
   for (;;) {
     await sleep(CAPTCHA_POLL_MS);
-    if (!(await stillWanted())) return false;
+    if (!(await stillWanted())) {
+      await ended('the run stopped or the tab went elsewhere, no return to the list');
+      return false;
+    }
     if (await isCaptchaOnTab(tabId)) continue;
 
     // a solved captcha leaves through an animation and a wrong answer brings a new one — the page has
     // to stay clear for a human-sized beat before the bot moves
     await sleep(reactionDelayMs());
-    if (!(await stillWanted())) return false;
+    if (!(await stillWanted())) {
+      await ended('the run stopped or the tab went elsewhere, no return to the list');
+      return false;
+    }
     if (!(await isCaptchaOnTab(tabId))) break;
   }
 
   await saveRunPause([]);
+  await ended('the captcha is gone, returning to the list');
   return true;
 }
 
@@ -253,6 +279,16 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(
   HH_RU_FILTER,
 );
 
+// A captcha is answered (and paid for) only on the tab the run drives: on a tab a person is browsing by
+// hand, it is theirs to solve. The page can't tell which tab it is, the sender can.
+async function solveCaptchaForRun(payload, sender) {
+  const runState = await getRunState();
+  if (runState.status !== 'running' || runState.tabId !== sender.tab?.id) {
+    return { success: false, kind: 'skipped', error: 'not the tab of a running run' };
+  }
+  return solveCaptcha(payload);
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'HHAA_GENERATE_ANSWERS') {
     generateAnswers(message.payload)
@@ -270,6 +306,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch((error) => {
         reportError('background', `generateChatReply threw: ${error.message}`, stackOf(error));
         sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
+  if (message.type === 'HHAA_SOLVE_CAPTCHA') {
+    solveCaptchaForRun(message.payload, sender)
+      .then(sendResponse)
+      .catch((error) => {
+        reportError('background', `solveCaptcha threw: ${error.message}`, stackOf(error));
+        sendResponse({ success: false, kind: 'transient', error: error.message });
       });
     return true;
   }

@@ -36,10 +36,25 @@ const STOP_MESSAGES = {
   [StopReason.HH_DAILY_LIMIT]: 'hh.ru отказал в отклике: исчерпан его лимит (200 откликов за 24 часа).',
 };
 
-// "running" that stands still until a human clears something on the page — what to tell them to do
-const PAUSE_MESSAGES = {
-  [PauseReason.CAPTCHA]: 'Введите капчу на странице hh.ru и нажмите «Отправить» — работа продолжится сама.',
+// "running" that stands still until something on the page is cleared — what to tell the person: to act, or
+// that the extension is on it. A captcha the extension is solving carries both reasons, and that one wins:
+// it is only a pause that needs the person once the auto-solve is off or has given up.
+const PAUSE_VIEWS = {
+  [PauseReason.CAPTCHA]: {
+    title: 'Пауза — нужна ваша помощь',
+    text: 'Введите капчу на странице hh.ru и нажмите «Отправить» — работа продолжится сама.',
+  },
+  [PauseReason.CAPTCHA_AUTO]: {
+    title: 'Пауза — решаем капчу',
+    text: 'Расширение решает капчу само, работа продолжится сама. Если не получится, здесь появится просьба ввести её вручную.',
+  },
 };
+const UNKNOWN_PAUSE_VIEW = { title: 'Пауза', text: 'Ждём, пока страница снова станет доступна.' };
+
+function pauseViewOf(pause) {
+  const reason = pause.includes(PauseReason.CAPTCHA_AUTO) ? PauseReason.CAPTCHA_AUTO : pause[0];
+  return PAUSE_VIEWS[reason] || UNKNOWN_PAUSE_VIEW;
+}
 
 let els = {};
 
@@ -145,7 +160,11 @@ async function render() {
   els.statusText.textContent = isPaused ? 'Пауза' : STATUS_LABELS[runState.status] || runState.status;
 
   els.pauseCard.hidden = !isPaused;
-  if (isPaused) els.pauseText.textContent = PAUSE_MESSAGES[pause[0]] || 'Ждём, пока страница снова станет доступна.';
+  if (isPaused) {
+    const view = pauseViewOf(pause);
+    els.pauseTitle.textContent = view.title;
+    els.pauseText.textContent = view.text;
+  }
 
   if (runState.status === 'error' && runState.lastError) {
     els.statusError.hidden = false;
@@ -267,6 +286,74 @@ function classifyUrl(url) {
   return 'non_hh_page';
 }
 
+// How the captchas of a run went, counted from the diagnostic entries the watcher and the auto-solver write
+// (see the list at the top of lib/captcha-autosolve.js). Each episode is one `seq=N` story in `diagnostics`;
+// this is only the tally, plus the hints for the ways the whole thing can silently not happen.
+function captchaDiagnosis(entries) {
+  const of = (message) => entries.filter((entry) => entry.message === message);
+  const shown = of('captcha shown, run paused until it is solved');
+  if (shown.length === 0) return [];
+
+  const contextOf = (entry) => entry.context ?? '';
+  const numbersOf = (list, name) =>
+    list.map((entry) => Number(contextOf(entry).match(new RegExp(`${name}=([0-9.]+)`))?.[1])).filter(Number.isFinite);
+  const sum = (numbers) => numbers.reduce((total, number) => total + number, 0);
+  const countBy = (list, pick) =>
+    Object.entries(
+      list.reduce((counts, entry) => ({ ...counts, [pick(entry)]: (counts[pick(entry)] ?? 0) + 1 }), {}),
+    )
+      .sort((a, b) => b[1] - a[1])
+      .map(([name, count]) => `${name} ×${count}`)
+      .join('; ');
+
+  const arrivedWithError = shown.filter((entry) => contextOf(entry).includes('errorShown=true')).length;
+  const gone = of('captcha gone, run resumed');
+  const solvedBy = (who) => gone.filter((entry) => contextOf(entry).includes(`solvedBy=${who}`)).length;
+  const answers = of('captcha model answered');
+  const results = countBy(answers, (entry) => contextOf(entry).match(/result=(\S+)/)?.[1] ?? '?');
+  const handedOver = of('captcha auto-solve handed over to a person');
+  const reasons = countBy(handedOver, (entry) => contextOf(entry).replace(/^seq=\d+ /, '').split(' | ')[0]);
+  const accepted = of('captcha answer accepted').length;
+  const rejected = of('captcha answer rejected').length;
+  const times = numbersOf(answers, 'ms');
+  const averageS = times.length > 0 ? (sum(times) / times.length / 1000).toFixed(1) : '-';
+
+  const lines = [
+    `Капч за прогон: ${shown.length}, из них появились уже с «Неверный текст»: ${arrivedWithError}. ` +
+      `Решено расширением: ${solvedBy('auto')}, человеком: ${gone.length - solvedBy('auto')}. ` +
+      'Каждая капча — одна история по её seq=N в diagnostics ("captcha shown" … "captcha gone").',
+  ];
+
+  if (answers.length > 0 || handedOver.length > 0) {
+    lines.push(
+      `Автоответчик: вызовов модели ${answers.length} (${results || 'нет'}), в среднем ${averageS} с, ` +
+        `потрачено $${sum(numbersOf(answers, 'cost')).toFixed(5)}. Отправлено ответов ${of('captcha answer submitted').length}: ` +
+        `принято hh.ru ${accepted}, отклонено ${rejected} (по «captcha answer accepted/rejected»). ` +
+        `Брошенных попыток: ${of('captcha attempt abandoned').length}. ` +
+        `Передано человеку: ${handedOver.length}${reasons ? ` — причины: ${reasons}` : ''}.`,
+    );
+  }
+
+  const stalled = of('captcha auto-solve idle: nothing attempted yet').length;
+  const slow = of('captcha auto-solve attempt is taking long').length;
+  if (stalled + slow > 0) {
+    lines.push(
+      `Предупреждения автоответчика: простаивал без единой попытки — ${stalled}, попытка шла слишком долго — ${slow}. ` +
+        'В записях указано состояние картинки/кнопок и фаза, на которой он завис.',
+    );
+  }
+
+  const decided = of('captcha auto-solve started').length + of('captcha auto-solve not used').length;
+  if (decided === 0) {
+    lines.push(
+      'Ни одна капча не дошла до автоответчика: нет ни "started", ни "not used" — решатель не запускался вовсе ' +
+        '(старая версия расширения на странице? капча появилась вне запуска? ищите "captcha shown" без продолжения).',
+    );
+  }
+
+  return lines;
+}
+
 // plain-language read of "is this run stuck, and why" — cross-referencing runState against the
 // tab's actual current URL is what actually answers that question; the rest of the report is the
 // evidence backing this verdict up
@@ -349,17 +436,7 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
     );
   }
 
-  const captchas = diagnosticLog.filter(
-    (entry) => entry.at >= runState.startedAt && entry.message === 'captcha shown, run paused until it is solved',
-  );
-  if (captchas.length > 0) {
-    const arrivedWithError = captchas.filter((entry) => entry.context?.includes('errorShown=true')).length;
-    lines.push(
-      `Капч за прогон: ${captchas.length}, из них появились уже с «Неверный текст»: ${arrivedWithError}. ` +
-        'Контекст каждой (номер в документе, возраст страницы, ключ картинки, клики и запросы перед появлением) — ' +
-        'в записях "captcha shown" / "captcha changed while up" / "captcha gone" в diagnostics.',
-    );
-  }
+  lines.push(...captchaDiagnosis(diagnosticLog.filter((entry) => entry.at >= runState.startedAt)));
 
   if (lines.length === 0) {
     lines.push('Явных признаков зависания не найдено по имеющимся данным (статус/URL вкладки согласованы).');
@@ -443,8 +520,10 @@ async function handleDownloadCaptchas() {
   }
 
   const files = await Promise.all(
-    pictures.map(async ({ blob }, index) => ({
-      name: `captcha-${String(index + 1).padStart(3, '0')}.png`,
+    // the first 8 characters of hh.ru's picture key are what the diagnostic log calls the picture (`key=`),
+    // so a file can be matched to the entries about it
+    pictures.map(async ({ key, blob }, index) => ({
+      name: `captcha-${String(index + 1).padStart(3, '0')}-${key.slice(0, 8)}.png`,
       data: new Uint8Array(await blob.arrayBuffer()),
     })),
   );
@@ -559,6 +638,7 @@ export function initRunView() {
     modeAssistedBtn: document.getElementById('modeAssistedBtn'),
     modeHint: document.getElementById('modeHint'),
     pauseCard: document.getElementById('pauseCard'),
+    pauseTitle: document.getElementById('pauseTitle'),
     pauseText: document.getElementById('pauseText'),
     approvalCard: document.getElementById('approvalCard'),
     approvalVacancy: document.getElementById('approvalVacancy'),

@@ -14,7 +14,9 @@ zip -r "$ZIP_PATH" . \
   -x "debug-htmls/*" \
   -x "plans/*" \
   -x "builds/*" \
-  -x "data/old/*" \
+  -x "data/*" \
+  -x "captcha-bench/*" \
+  -x "*.test.mjs" \
   -x ".git/*" \
   -x "*.DS_Store"
 
