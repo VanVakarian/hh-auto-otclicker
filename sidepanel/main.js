@@ -2,6 +2,7 @@ import { initRunView, renderRunView } from './run-view.js';
 import { initAnalyticsView, renderAnalyticsView } from './analytics-view.js';
 import { initSettingsView } from './settings-view.js';
 import { initSearchesView } from './searches-view.js';
+import { initBenchLink } from './bench-link.js';
 import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
 
 installUncaughtErrorCapture('sidepanel');
@@ -38,3 +39,4 @@ initRunView();
 initSearchesView();
 initAnalyticsView();
 initSettingsView();
+initBenchLink();

@@ -21,11 +21,15 @@ import {
   haltOnContextInvalidated,
   onContextInvalidated,
 } from '../lib/extension-context.js';
-import { VACANCY_CARD_SELECTOR, NEXT_PAGE_SELECTOR, PAGER_SELECTOR } from '../lib/hh-pages.js';
+import {
+  VACANCY_CARD_SELECTOR,
+  VACANCY_TITLE_SELECTOR,
+  VACANCY_EMPLOYER_SELECTOR,
+  NEXT_PAGE_SELECTOR,
+  PAGER_SELECTOR,
+} from '../lib/hh-pages.js';
 
 const RESPONSE_BUTTON_SELECTOR = '[data-qa="vacancy-serp__vacancy_response"]';
-const TITLE_SELECTOR = '[data-qa="serp-item__title-text"]';
-const EMPLOYER_SELECTOR = '[data-qa="vacancy-serp__vacancy-employer-text"]';
 
 // hh.ru renders a result page in stages — the first vacancies show up, the rest of them and the pager
 // only later or once the page is scrolled to its end. "Nothing left to respond to and no next-page
@@ -69,8 +73,8 @@ function readCard(cardEl) {
   if (!responseLink) return null;
   const vacancyId = extractVacancyId(responseLink.getAttribute('href') || '');
   if (!vacancyId) return null;
-  const title = cardEl.querySelector(TITLE_SELECTOR)?.textContent?.trim() || '';
-  const company = cardEl.querySelector(EMPLOYER_SELECTOR)?.textContent?.trim() || '';
+  const title = cardEl.querySelector(VACANCY_TITLE_SELECTOR)?.textContent?.trim() || '';
+  const company = cardEl.querySelector(VACANCY_EMPLOYER_SELECTOR)?.textContent?.trim() || '';
   return { vacancyId, title, company, responseLink, cardEl };
 }
 

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1.0">
+  <title>Подходит ли вакансия — бенчмарк</title>
+  <link rel="stylesheet"
+        href="bench.css">
+</head>
+
+<body>
+  <header class="top">
+    <div class="top-inner">
+      <div class="brand">
+        <span class="badge">HH</span>
+        <div>
+          <h1 class="brand-title">Подходит ли вакансия</h1>
+          <div class="brand-sub">Бенчмарк решающей модели Jev · режим отладки</div>
+        </div>
+      </div>
+      <div class="source"
+           id="source"></div>
+    </div>
+  </header>
+
+  <div class="threshold-bar">
+    <div class="threshold-inner">
+      <label class="threshold-label"
+             for="threshold">Порог</label>
+      <output class="threshold-out"
+              id="thresholdOut"></output>
+      <input type="range"
+             id="threshold"
+             class="slider"
+             min="0"
+             max="100"
+             step="1">
+      <span class="threshold-hint">Вероятность не ниже порога — «подходит». Двигайте: все ответы пересчитываются сразу,
+        без новых запросов.</span>
+    </div>
+  </div>
+
+  <main class="page">
+    <section class="panel">
+      <h2 class="section-title">Что спрашиваем</h2>
+      <div class="hint">Рассказываете о себе своими словами: кем хотите быть, что подходит и что нет. Несколько
+        вариантов уходят в одном запросе — их можно сравнить на одних и тех же вакансиях бесплатно.</div>
+      <div id="prompts"></div>
+      <button type="button"
+              id="addPromptBtn"
+              class="btn btn_ghost">+ Ещё вариант промпта</button>
+
+      <h2 class="section-title">Что отправляем</h2>
+      <div class="hint">Всё, что есть в карточке выдачи, без выбора: название, компания, город, опыт, формат работы. В
+        расширенном виде выдачи (<code>enable_snippets=true</code>) к этому добавляются «обязанности» и «требования» —
+        именно они чаще всего решают дело. В кратком виде уходит только краткая карточка.</div>
+
+      <div class="run-row">
+        <button type="button"
+                id="runBtn"
+                class="btn btn_primary">Прогнать</button>
+        <button type="button"
+                id="stopBtn"
+                class="btn"
+                hidden>Остановить</button>
+        <button type="button"
+                id="clearBtn"
+                class="btn btn_ghost">Сбросить прогон</button>
+        <button type="button"
+                id="exportBtn"
+                class="btn"
+                title="Весь прогон одним .md-файлом: задача, промпты, запросы, ответы, цена — чтобы разобрать в другой LLM">Экспорт
+          для анализа</button>
+        <button type="button"
+                id="copyBtn"
+                class="btn btn_ghost"
+                title="То же самое — в буфер обмена">Копировать</button>
+        <span class="run-note"
+              id="runNote"></span>
+      </div>
+      <div class="progress"
+           id="progress"
+           hidden>
+        <div class="progress-fill"
+             id="progressFill"></div>
+      </div>
+      <div class="notice"
+           id="notice"
+           hidden></div>
+
+      <details class="request-details">
+        <summary>Точный запрос к Jev</summary>
+        <div class="hint">Первая вакансия страницы — как она уходит в модель; вопрос — на каждый промпт.</div>
+        <pre class="code"
+             id="requestPreview"></pre>
+      </details>
+    </section>
+
+    <section id="stats"></section>
+
+    <section>
+      <div class="toolbar"
+           id="toolbar"></div>
+      <div id="rows"
+           class="rows"></div>
+    </section>
+  </main>
+
+  <script type="module"
+          src="bench/main.js"></script>
+</body>
+
+</html>

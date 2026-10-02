@@ -552,19 +552,8 @@ body {
   background: var(--brand-dark);
 }
 
-.link-btn {
-  align-self: flex-start;
-  background: none;
-  border: none;
-  color: var(--brand-dark);
-  font-size: 12px;
-  font-weight: 700;
-  cursor: pointer;
-  padding: 4px 0;
-}
-
-.link-btn:hover {
-  text-decoration: underline;
+.tools-card .hint + .submit-btn {
+  margin-top: 16px;
 }
 
 /* Аналитика */

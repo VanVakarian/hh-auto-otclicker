@@ -118,13 +118,6 @@
       <ul class="event-feed"
           id="eventFeed"></ul>
     </div>
-
-    <button type="button"
-            id="downloadDiagnosticsBtn"
-            class="link-btn">Скачать диагностику</button>
-    <button type="button"
-            id="downloadCaptchasBtn"
-            class="link-btn">Скачать капчи</button>
   </section>
 
   <section id="tab-analytics"
@@ -384,6 +377,22 @@
       <div class="data-transfer-status"
            id="dataTransferStatus"
            hidden></div>
+    </div>
+
+    <div class="card tools-card">
+      <h2 class="card-title">Диагностика и отладка</h2>
+      <button type="button"
+              id="downloadDiagnosticsBtn"
+              class="submit-btn submit-btn_secondary">Скачать диагностику</button>
+      <div class="hint">Журналы работы расширения и настройки (ключ скрыт) одним JSON-файлом — приложить к описанию проблемы.</div>
+      <button type="button"
+              id="downloadCaptchasBtn"
+              class="submit-btn submit-btn_secondary">Скачать капчи</button>
+      <div class="hint">ZIP с картинками всех сохранённых капч. После скачивания они удаляются из архива расширения.</div>
+      <button type="button"
+              id="openBenchBtn"
+              class="submit-btn submit-btn_secondary">Бенчмарк «подходит ли вакансия»</button>
+      <div class="hint">Открывает отдельную страницу: прогоняет карточки текущей выдачи через модель Jev и показывает, какие вакансии она сочла подходящими.</div>
     </div>
   </section>
 
