@@ -1,23 +1,16 @@
-import { KEYS } from '../lib/storage.js';
-
-// What the person is likely to want first; every word of it is theirs to change on the page
-const DEFAULT_PROMPT =
-  'Хочет быть менеджером проекта или продукта в разработке софта: веб-сервисы, мобильные приложения, SaaS, ' +
-  'внутренние платформы. Не подходит всё, что не про создание софтверного продукта: внедрение и сопровождение 1С, ' +
-  'ERP и SAP, ИТ-сервис и ITSM внутри нефтегазовой, мебельной или любой другой не софтверной компании, колл-центры, ' +
-  'маркетинг, SMM, продажи, стройка, производство, товары (обувь, одежда, БАДы, еда), логистика, мероприятия.';
+import { KEYS, getSettings } from '../lib/storage.js';
 
 // `prompts` and `threshold` are what the page asks and judges by; `run` is the last run (kept so a reload
-// doesn't throw away what was paid for)
-const DEFAULT_DOC = {
-  prompts: [{ key: 'A', text: DEFAULT_PROMPT }],
-  threshold: 0.5,
-  run: null,
-};
-
+// doesn't throw away what was paid for). Until the page has values of its own, it starts from the working ones —
+// the prompt and the threshold of the extension's settings, which are what a real run judges by.
 export async function loadBench() {
-  const stored = (await chrome.storage.local.get(KEYS.FIT_BENCH))[KEYS.FIT_BENCH];
-  return { ...structuredClone(DEFAULT_DOC), ...stored };
+  const [stored, settings] = await Promise.all([chrome.storage.local.get(KEYS.FIT_BENCH), getSettings()]);
+  return {
+    run: null,
+    prompts: [{ key: 'A', text: settings.fitPrompt }],
+    threshold: settings.fitThreshold,
+    ...stored[KEYS.FIT_BENCH],
+  };
 }
 
 export function saveBench(doc) {

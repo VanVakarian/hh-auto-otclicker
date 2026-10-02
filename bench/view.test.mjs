@@ -215,8 +215,8 @@ test('renderStats', async (t) => {
 
   await t.test('the whole cost, the cost of a request, the requests', () => {
     const text = stats().textContent;
-    assert.match(text, /Потрачено \$0\.00006 /); // 3 answered requests of $0.00002
-    assert.match(text, /За запрос \$0\.00002/);
+    assert.match(text, /Потрачено 0,6 копейки /); // 3 answered requests of 0,2 копейки
+    assert.match(text, /За запрос 0,2 копейки/);
     assert.match(text, /Запросов 4 1 с ошибкой/);
   });
 

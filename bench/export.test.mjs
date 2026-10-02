@@ -90,7 +90,7 @@ test('buildExport', async (t) => {
     assert.match(section, /enable_snippets=true/);
     assert.match(section, /expanded \(со сниппетами\)/);
     assert.match(section, /typesafe\/jev-1\.13-20260917/);
-    assert.match(section, /\$0\.00006 всего/);
+    assert.match(section, /0,6 копейки всего/);
     assert.match(section, /из них с ошибкой: 1/);
   });
 

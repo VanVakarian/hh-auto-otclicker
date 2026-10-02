@@ -103,6 +103,9 @@
       <div class="current-vacancy"
            id="currentVacancy"
            hidden></div>
+      <div class="hint"
+           id="fitLine"
+           hidden></div>
       <div class="button-row">
         <button type="button"
                 id="startBtn"
@@ -133,6 +136,21 @@
       <h2 class="card-title">Отклики за 7 дней</h2>
       <div class="bar-chart"
            id="barChart"></div>
+    </div>
+
+    <div class="card"
+         id="fitCard"
+         hidden>
+      <h2 class="card-title">Отбор по Jev</h2>
+      <div class="stats-grid"
+           id="fitStats"></div>
+      <div class="hint">Отклонённые при текущем пороге: проверьте, не отсеивается ли нужное, и подберите порог в настройках.</div>
+      <div class="log-table-wrap">
+        <table class="log-table"
+               id="fitTable">
+          <tbody></tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card">
@@ -350,11 +368,50 @@
     </div>
 
     <div class="card">
-      <div class="counter-row">
-        <span class="counter-label">Анкетный чёрный список</span>
-        <span class="counter-value"
-              id="questionnaireBlacklistCount">0</span>
+      <h2 class="card-title">Отбор вакансий по Jev</h2>
+      <div class="form-group form-group_toggle">
+        <label class="form-label"
+               for="fitEnabled">Пропускать неподходящие вакансии</label>
+        <input type="checkbox"
+               id="fitEnabled">
       </div>
+      <div class="hint">Перед откликом модель Jev оценивает карточку вакансии по вашему описанию ниже; вакансии с оценкой ниже порога бот пропускает. Нужен API-ключ OpenRouter. Текст карточек вакансий и описание уходят в OpenRouter и дальше модели. Отбор точнее в расширенном виде выдачи (со сниппетами), чем в кратком.</div>
+
+      <div class="form-group">
+        <label for="fitPrompt"
+               class="form-label">О себе: кем хотите быть, что подходит и что нет</label>
+        <textarea id="fitPrompt"
+                  class="form-textarea"
+                  rows="6"></textarea>
+        <div class="hint">Смена описания, как и обновление расширения с новой моделью, отменяет прежние отказы: вакансии оценятся заново.</div>
+      </div>
+
+      <div class="form-group">
+        <label for="fitThreshold"
+               class="form-label">Порог, %</label>
+        <input type="number"
+               id="fitThreshold"
+               class="form-input"
+               min="0"
+               max="100"
+               step="1">
+        <div class="hint">Вероятность не ниже порога — вакансия подходит. Порог можно менять в любой момент: новых запросов это не требует.</div>
+      </div>
+
+      <button type="button"
+              id="openBenchBtn"
+              class="submit-btn submit-btn_secondary">Бенчмарк «подходит ли вакансия»</button>
+      <div class="hint">Открывает отдельную страницу: прогоняет карточки текущей выдачи через Jev и показывает, какие вакансии она сочла подходящими. Помогает подобрать описание и порог.</div>
+    </div>
+
+    <div class="card">
+      <div class="counter-row">
+        <span class="counter-label">Чёрный список вакансий</span>
+        <span class="counter-value"
+              id="blacklistCount">0</span>
+      </div>
+      <div class="hint"
+           id="blacklistBreakdown"></div>
       <button type="button"
               id="resetBlacklistBtn"
               class="submit-btn submit-btn_secondary">Сбросить</button>
@@ -421,10 +478,6 @@
               id="downloadCaptchasBtn"
               class="submit-btn submit-btn_secondary">Скачать капчи</button>
       <div class="hint">ZIP с картинками всех сохранённых капч. После скачивания они удаляются из архива расширения.</div>
-      <button type="button"
-              id="openBenchBtn"
-              class="submit-btn submit-btn_secondary">Бенчмарк «подходит ли вакансия»</button>
-      <div class="hint">Открывает отдельную страницу: прогоняет карточки текущей выдачи через модель Jev и показывает, какие вакансии она сочла подходящими.</div>
     </div>
   </section>
 

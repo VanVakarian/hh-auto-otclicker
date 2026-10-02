@@ -1,4 +1,4 @@
-import { getSettings } from '../lib/storage.js';
+import { getSettings, saveSettings } from '../lib/storage.js';
 import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
 import { JEV_MODEL } from '../lib/jev.js';
 import { buildFitQuestions, buildVacancyState, judgeVacancy } from '../lib/vacancy-fit.js';
@@ -294,6 +294,31 @@ async function startRun() {
   else setNotice(`Готово: ${total} запросов.`, 'ok');
 }
 
+// The working values are the extension's settings: the prompt A and the threshold of this page become them, or
+// the other way round. Nothing here moves them on its own.
+function promptA() {
+  return doc.prompts.find((prompt) => prompt.key === 'A') ?? doc.prompts[0];
+}
+
+async function makeWorking() {
+  const text = promptA()?.text.trim();
+  if (!text) return setNotice('Промпт A пуст — рабочим его не сделать.', 'error');
+  await saveSettings({ fitPrompt: text, fitThreshold: doc.threshold });
+  setNotice('Промпт A и порог стали рабочими.', 'ok');
+}
+
+async function takeWorking() {
+  const { fitPrompt, fitThreshold } = await getSettings();
+  doc.prompts = [{ key: 'A', text: fitPrompt }, ...doc.prompts.filter((prompt) => prompt.key !== 'A')];
+  doc.threshold = fitThreshold;
+  saveSoon();
+  renderPrompts();
+  renderThreshold();
+  renderControls();
+  renderResults();
+  setNotice('Взяты рабочие промпт и порог.', 'ok');
+}
+
 async function clearRun() {
   doc.run = null;
   await saveNow();
@@ -322,6 +347,8 @@ async function copyExport() {
 
 function bindControls() {
   $('addPromptBtn').addEventListener('click', addPrompt);
+  $('makeWorkingBtn').addEventListener('click', makeWorking);
+  $('takeWorkingBtn').addEventListener('click', takeWorking);
   $('runBtn').addEventListener('click', startRun);
   $('stopBtn').addEventListener('click', () => running?.abort.abort());
   $('clearBtn').addEventListener('click', clearRun);

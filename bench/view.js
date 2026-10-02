@@ -1,3 +1,4 @@
+import { formatRubles } from '../lib/money.js';
 import { isFit, buildVacancyState } from '../lib/vacancy-fit.js';
 import {
   hasError,
@@ -27,7 +28,6 @@ export function el(tag, props = {}, ...children) {
 const VERDICT_NAME = { accept: 'подходит', reject: 'не подходит', mixed: 'спорная', none: 'без оценки' };
 
 const pct = (probability) => `${Math.round(probability * 100)}%`;
-const usd = (cost) => `$${cost.toFixed(7).replace(/0+$/, '').replace(/\.$/, '') || '0'}`;
 const ms = (value) => `${Math.round(value)} мс`;
 const chip = (text, modifier = '') => el('span', { class: `chip ${modifier}`.trim() }, text);
 
@@ -82,7 +82,7 @@ function sentDetails(vacancy, ctx) {
   const state = record?.state ?? buildVacancyState(vacancy);
   let meta = 'ещё не отправлялось';
   if (record?.ok)
-    meta = `${usd(record.cost)} · ${record.inputTokens} токенов · ${ms(record.responseTime)} · ${record.model}`;
+    meta = `${formatRubles(record.cost)} · ${record.inputTokens} токенов · ${ms(record.responseTime)} · ${record.model}`;
   if (record && !record.ok) meta = `⚠ ${record.error}`;
 
   return el(
@@ -304,8 +304,8 @@ export function renderStats(root, ctx) {
     el(
       'div',
       { class: 'tiles' },
-      tile('Потрачено', usd(cost.cost), 'за весь прогон'),
-      tile('За запрос', usd(cost.avgCost), `${Math.round(cost.avgInputTokens)} токенов в среднем`),
+      tile('Потрачено', formatRubles(cost.cost), 'за весь прогон'),
+      tile('За запрос', formatRubles(cost.avgCost), `${Math.round(cost.avgInputTokens)} токенов в среднем`),
       tile('Запросов', cost.requests, cost.failed ? `${cost.failed} с ошибкой` : 'без ошибок'),
       tile('Ответ', ms(cost.avgResponseTime), 'в среднем'),
       tile('Вакансий', run.vacancies.length, `вид выдачи: ${run.view}`),

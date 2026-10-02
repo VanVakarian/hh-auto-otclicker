@@ -3,7 +3,7 @@ import {
   getSettings,
   getRunState,
   saveRunState,
-  addQuestionnaireBlacklistEntry,
+  addBlacklistEntry,
   addResponseLogEntry,
   addAnswersLogEntry,
   addTraceEntry,
@@ -272,7 +272,7 @@ const SKIP_REASON_RESULTS = {
 };
 
 async function skipQuestionnaire({ vacancyId, title, company, listUrl, reason }) {
-  await addQuestionnaireBlacklistEntry({ vacancyId, title, company, reason, at: Date.now() });
+  await addBlacklistEntry({ vacancyId, title, company, reason, at: Date.now() });
   await addResponseLogEntry({
     at: Date.now(),
     vacancyId,

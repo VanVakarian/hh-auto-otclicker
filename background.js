@@ -1,12 +1,14 @@
 import { generateAnswers, generateChatReply } from './lib/llm.js';
 import { solveCaptcha } from './lib/captcha-solver.js';
+import { rateVacancy } from './lib/vacancy-fit.js';
 import {
   KEYS,
   addNavigationLogEntry,
   addTraceEntry,
   getRunState,
   getRunPause,
-  maintainJournals,
+  getSettings,
+  maintainStorage,
   saveRunState,
   saveRunPause,
   PauseReason,
@@ -61,13 +63,13 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  maintainJournals();
+  maintainStorage();
   uploadNow();
 });
 
 chrome.runtime.onInstalled.addListener(async () => {
   // an update can bring a new storage layout — the journals are brought to it right away
-  maintainJournals();
+  maintainStorage();
   ensureUploadAlarm();
   uploadNow();
   console.log('🧠 [background] installed, enabling side panel on action click');
@@ -325,43 +327,53 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(
   HH_RU_FILTER,
 );
 
-// A captcha is answered (and paid for) only on the tab the run drives: on a tab a person is browsing by
-// hand, it is theirs to solve. The page can't tell which tab it is, the sender can.
-async function solveCaptchaForRun(payload, sender) {
+// Whatever costs money is paid for only on the tab the run drives: on a tab a person is browsing by hand, a
+// captcha is theirs to solve and a vacancy is theirs to judge. The page can't tell which tab it is, the sender can.
+async function isTabOfRunningRun(sender) {
   const runState = await getRunState();
-  if (runState.status !== 'running' || runState.tabId !== sender.tab?.id) {
-    return { success: false, kind: 'skipped', error: 'not the tab of a running run' };
-  }
-  return solveCaptcha(payload);
+  return runState.status === 'running' && runState.tabId === sender.tab?.id;
 }
 
+const NOT_THE_RUN_TAB = { success: false, kind: 'skipped', error: 'not the tab of a running run' };
+
+async function solveCaptchaForRun(payload, sender) {
+  return (await isTabOfRunningRun(sender)) ? solveCaptcha(payload) : NOT_THE_RUN_TAB;
+}
+
+// The key and the prompt are the settings' own, read here: the page sends only the card
+async function rateVacancyForRun(vacancy, sender) {
+  if (!(await isTabOfRunningRun(sender))) return NOT_THE_RUN_TAB;
+  const { apiKey, fitPrompt } = await getSettings();
+  return rateVacancy({ apiKey, prompt: fitPrompt, vacancy });
+}
+
+// a message can't carry a Blob, so the picture arrives as a data URL and is stored as binary
+async function saveCaptchaPicture({ key, dataUrl }) {
+  const blob = await (await fetch(dataUrl)).blob();
+  await addCaptchaPicture({ key, at: Date.now(), blob });
+  return { success: true };
+}
+
+// What the page can ask of the worker. Each handler resolves to the answer; one that throws is written down
+// (`failed` says what it was doing) and answered with a failure — `failure` adds what the caller needs to read
+// it, such as the kind that tells a failure worth another try.
+const MESSAGE_HANDLERS = {
+  HHAA_GENERATE_ANSWERS: { run: generateAnswers, failed: 'generateAnswers threw' },
+  HHAA_GENERATE_CHAT_REPLY: { run: generateChatReply, failed: 'generateChatReply threw' },
+  HHAA_SOLVE_CAPTCHA: { run: solveCaptchaForRun, failed: 'solveCaptcha threw', failure: { kind: 'transient' } },
+  HHAA_RATE_VACANCY: { run: rateVacancyForRun, failed: 'rateVacancy threw', failure: { kind: 'transient' } },
+  HHAA_SAVE_CAPTCHA: { run: saveCaptchaPicture, failed: 'saving captcha picture failed' },
+};
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'HHAA_GENERATE_ANSWERS') {
-    generateAnswers(message.payload)
+  const handler = MESSAGE_HANDLERS[message.type];
+  if (handler) {
+    handler
+      .run(message.payload, sender)
       .then(sendResponse)
       .catch((error) => {
-        reportError('background', `generateAnswers threw: ${error.message}`, stackOf(error));
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;
-  }
-
-  if (message.type === 'HHAA_GENERATE_CHAT_REPLY') {
-    generateChatReply(message.payload)
-      .then(sendResponse)
-      .catch((error) => {
-        reportError('background', `generateChatReply threw: ${error.message}`, stackOf(error));
-        sendResponse({ success: false, error: error.message });
-      });
-    return true;
-  }
-
-  if (message.type === 'HHAA_SOLVE_CAPTCHA') {
-    solveCaptchaForRun(message.payload, sender)
-      .then(sendResponse)
-      .catch((error) => {
-        reportError('background', `solveCaptcha threw: ${error.message}`, stackOf(error));
-        sendResponse({ success: false, kind: 'transient', error: error.message });
+        reportError('background', `${handler.failed}: ${error.message}`, stackOf(error));
+        sendResponse({ success: false, ...handler.failure, error: error.message });
       });
     return true;
   }
@@ -369,20 +381,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // the panel's "send now"; the answer is the status the cycle leaves
   if (message.type === 'HHAA_UPLOAD_NOW') {
     uploadNow().then(sendResponse);
-    return true;
-  }
-
-  // a message can't carry a Blob, so the picture arrives as a data URL and is stored as binary
-  if (message.type === 'HHAA_SAVE_CAPTCHA') {
-    const { key, dataUrl } = message.payload;
-    fetch(dataUrl)
-      .then((response) => response.blob())
-      .then((blob) => addCaptchaPicture({ key, at: Date.now(), blob }))
-      .then(() => sendResponse({ success: true }))
-      .catch((error) => {
-        reportError('background', `saving captcha picture failed: ${error.message}`, stackOf(error));
-        sendResponse({ success: false, error: error.message });
-      });
     return true;
   }
 

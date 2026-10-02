@@ -1,4 +1,14 @@
-import { getResponseLog, getAnswersLog, isSuccessResult } from '../lib/storage.js';
+import {
+  getResponseLog,
+  getAnswersLog,
+  isSuccessResult,
+  getBlacklist,
+  getFitSpend,
+  getSettings,
+} from '../lib/storage.js';
+import { fitRejections } from '../lib/blacklist-core.js';
+import { fitFingerprint, isFit } from '../lib/vacancy-fit.js';
+import { formatRubles } from '../lib/money.js';
 import { resultMeta, formatTime, formatDateShort, dayKey } from './format.js';
 
 let els = {};
@@ -127,6 +137,62 @@ function renderTable(log) {
     .join('');
 }
 
+// What the vacancy classifier has done: how many it was asked about, how many it turns away at today's threshold,
+// what it cost — and the latest of those it turns away, to check by eye that nothing wanted is among them. The
+// rejections count only while they belong to the current question and sit under the current threshold, the
+// same way the bot itself reads them.
+const REJECTED_ROWS = 20;
+
+function renderFit({ spend, blacklist, settings }) {
+  const rejections = fitRejections(blacklist, fitFingerprint(settings.fitPrompt));
+  const rejected = [...rejections.values()]
+    .filter((entry) => !isFit(entry.probability, settings.fitThreshold))
+    .sort((a, b) => b.at - a.at);
+
+  els.fitCard.hidden = spend.requests === 0 && rejected.length === 0;
+
+  const tiles = [
+    { value: spend.requests, label: 'Оценено' },
+    { value: rejected.length, label: `Отклонено при пороге ${Math.round(settings.fitThreshold * 100)}%` },
+    { value: formatRubles(spend.cost), label: 'Потрачено' },
+  ];
+  els.fitStats.replaceChildren(
+    ...tiles.map(({ value, label }) => {
+      const tile = document.createElement('div');
+      tile.className = 'stat-tile';
+      const valueEl = document.createElement('div');
+      valueEl.className = 'value';
+      valueEl.textContent = String(value);
+      const labelEl = document.createElement('div');
+      labelEl.className = 'label';
+      labelEl.textContent = label;
+      tile.append(valueEl, labelEl);
+      return tile;
+    }),
+  );
+
+  els.fitTable.querySelector('tbody').replaceChildren(
+    ...rejected.slice(0, REJECTED_ROWS).map((entry) => {
+      const row = document.createElement('tr');
+      const vacancy = document.createElement('td');
+      const title = document.createElement('a');
+      title.className = 'log-title';
+      title.href = `https://hh.ru/vacancy/${entry.vacancyId}`;
+      title.target = '_blank';
+      title.rel = 'noopener noreferrer';
+      title.textContent = entry.title || '—';
+      const company = document.createElement('div');
+      company.className = 'log-company';
+      company.textContent = entry.company || '';
+      vacancy.append(title, company);
+      const probability = document.createElement('td');
+      probability.textContent = `${Math.round(entry.probability * 100)}%`;
+      row.append(vacancy, probability);
+      return row;
+    }),
+  );
+}
+
 // grouped by company (case-insensitive) so the downloaded file reads top-to-bottom the way someone
 // scanning for "did I already talk to this company" would want, instead of chronological order
 async function handleDownloadAnswers() {
@@ -156,9 +222,16 @@ async function handleDownloadAnswers() {
 }
 
 async function render() {
-  const [log, answersLog] = await Promise.all([getResponseLog(), getAnswersLog()]);
+  const [log, answersLog, spend, blacklist, settings] = await Promise.all([
+    getResponseLog(),
+    getAnswersLog(),
+    getFitSpend(),
+    getBlacklist(),
+    getSettings(),
+  ]);
   renderStats(computeStats(log));
   renderChart(buildLast7Days(log));
+  renderFit({ spend, blacklist, settings });
   renderTable(log);
   els.answersLogCount.textContent = answersLog.length;
 }
@@ -167,6 +240,9 @@ export function initAnalyticsView() {
   els = {
     statsGrid: document.getElementById('statsGrid'),
     barChart: document.getElementById('barChart'),
+    fitCard: document.getElementById('fitCard'),
+    fitStats: document.getElementById('fitStats'),
+    fitTable: document.getElementById('fitTable'),
     logTable: document.getElementById('logTable'),
     answersLogCount: document.getElementById('answersLogCount'),
     downloadAnswersBtn: document.getElementById('downloadAnswersBtn'),

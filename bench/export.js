@@ -1,3 +1,4 @@
+import { formatRubles } from '../lib/money.js';
 import { JEV_MODEL } from '../lib/jev.js';
 import { FIT_QUESTION, buildFitQuestions, isFit } from '../lib/vacancy-fit.js';
 import { histogram, meanProbability, recordOf, summarizeCost, summarizePrompts } from './stats.js';
@@ -12,7 +13,6 @@ import { histogram, meanProbability, recordOf, summarizeCost, summarizePrompts }
 // raw (not only verdicts), so any threshold can be tried without the run.
 
 const pct = (probability) => `${Math.round(probability * 100)}%`;
-const usd = (cost) => `$${cost.toFixed(7).replace(/0+$/, '').replace(/\.$/, '') || '0'}`;
 
 const fence = (text, language = '') => `\`\`\`${language}\n${text}\n\`\`\``;
 
@@ -83,7 +83,7 @@ export function buildExport(run, threshold) {
       `- Вид выдачи: ${run.view} (${run.view === 'expanded' ? 'со сниппетами' : 'без сниппетов'})`,
       `- Модель: ${servedModel}`,
       `- Вакансий: ${run.vacancies.length}; запросов: ${cost.requests}, из них с ошибкой: ${cost.failed}`,
-      `- Стоимость: ${usd(cost.cost)} всего, ${usd(cost.avgCost)} за запрос; в среднем ${Math.round(cost.avgInputTokens)} входных токенов и ${Math.round(cost.avgResponseTime)} мс на запрос`,
+      `- Стоимость: ${formatRubles(cost.cost)} всего, ${formatRubles(cost.avgCost)} за запрос; в среднем ${Math.round(cost.avgInputTokens)} входных токенов и ${Math.round(cost.avgResponseTime)} мс на запрос`,
     ].join('\n'),
 
     [

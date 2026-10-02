@@ -2,17 +2,29 @@ import {
   getSettings,
   getRunState,
   saveRunState,
-  getQuestionnaireBlacklist,
-  addQuestionnaireBlacklistEntry,
+  getBlacklist,
+  addBlacklistEntry,
+  addFitSpend,
   addResponseLogEntry,
   addTraceEntry,
   getRespondedTodayCount,
   StopReason,
 } from '../lib/storage.js';
 import { waitFor, isVisible } from '../lib/dom.js';
-import { normalizeWordGroups, matchesWordGroups } from '../lib/matching.js';
+import { normalizeWordGroups } from '../lib/matching.js';
+import { SkipReason, skipReasonOf } from '../lib/card-rules.js';
+import { blockedIds, fitRejections } from '../lib/blacklist-core.js';
+import {
+  FIT_RATED_TRACE,
+  FitAction,
+  MAX_FAILURES_IN_A_ROW,
+  UnavailableReason,
+  createFitStep,
+} from '../lib/fit-step.js';
+import { fitFingerprint } from '../lib/vacancy-fit.js';
+import { readVacancyCard, vacancyIdOf } from '../lib/vacancy-card.js';
 import { randomDelayMs, reactionDelayMs } from '../lib/pacing.js';
-import { sleepUnlessStopped, humanPause, isRunStoppedError } from '../lib/run-control.js';
+import { sleepUnlessStopped, humanPause, isRunStoppedError, RunStoppedError } from '../lib/run-control.js';
 import { click, scrollToElement, scrollToPageBottom, fillText, navigate } from '../lib/interaction.js';
 import { startPageWatchers } from '../lib/page-watchers.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from '../lib/diagnostics.js';
@@ -21,13 +33,7 @@ import {
   haltOnContextInvalidated,
   onContextInvalidated,
 } from '../lib/extension-context.js';
-import {
-  VACANCY_CARD_SELECTOR,
-  VACANCY_TITLE_SELECTOR,
-  VACANCY_EMPLOYER_SELECTOR,
-  NEXT_PAGE_SELECTOR,
-  PAGER_SELECTOR,
-} from '../lib/hh-pages.js';
+import { VACANCY_CARD_SELECTOR, NEXT_PAGE_SELECTOR, PAGER_SELECTOR } from '../lib/hh-pages.js';
 
 const RESPONSE_BUTTON_SELECTOR = '[data-qa="vacancy-serp__vacancy_response"]';
 
@@ -58,31 +64,22 @@ const RELOCATION_WARNING_CONFIRM_SELECTOR = '[data-qa="relocation-warning-confir
 
 const POST_RESPONSE_SETTLE_MS = 500;
 
-const trace = (message, context) => addTraceEntry('list', message, context);
+const trace = (message, context, data) => addTraceEntry('list', message, context, data);
 
-function extractVacancyId(href) {
-  try {
-    return new URL(href, location.origin).searchParams.get('vacancyId');
-  } catch {
-    return null;
-  }
-}
-
+// A card the bot can respond to: everything the card says about its vacancy, plus the button and the element.
+// A card that has no button (already responded to) or no vacancy to name is none.
 function readCard(cardEl) {
   const responseLink = cardEl.querySelector(RESPONSE_BUTTON_SELECTOR);
   if (!responseLink) return null;
-  const vacancyId = extractVacancyId(responseLink.getAttribute('href') || '');
-  if (!vacancyId) return null;
-  const title = cardEl.querySelector(VACANCY_TITLE_SELECTOR)?.textContent?.trim() || '';
-  const company = cardEl.querySelector(VACANCY_EMPLOYER_SELECTOR)?.textContent?.trim() || '';
-  return { vacancyId, title, company, responseLink, cardEl };
+  const card = readVacancyCard(cardEl);
+  if (!card.vacancyId) return null;
+  return { ...card, responseLink, cardEl };
 }
 
 function findResponseButtonByVacancyId(vacancyId) {
   const cards = Array.from(document.querySelectorAll(VACANCY_CARD_SELECTOR));
   for (const cardEl of cards) {
-    const link = cardEl.querySelector(RESPONSE_BUTTON_SELECTOR);
-    if (link && extractVacancyId(link.getAttribute('href') || '') === vacancyId) return link;
+    if (vacancyIdOf(cardEl) === vacancyId) return cardEl.querySelector(RESPONSE_BUTTON_SELECTOR);
   }
   return null;
 }
@@ -97,49 +94,117 @@ function isStillRespondable(vacancyId) {
   return label.includes('откликнуться');
 }
 
+// What passing a card over by a rule leaves behind: a skip by the person's own words is part of the history of
+// responses, one by the blacklist only a trace
+async function recordSkip(card, reason) {
+  if (reason === SkipReason.BLACKLISTED) {
+    await trace('skipping card: already in the blacklist', `vacancyId=${card.vacancyId} title="${card.title}"`);
+    return;
+  }
+  const result = reason === SkipReason.COMPANY ? 'skipped_company' : 'skipped_title_stop_word';
+  await addResponseLogEntry({
+    at: Date.now(),
+    vacancyId: card.vacancyId,
+    title: card.title,
+    company: card.company,
+    result,
+  });
+}
+
+const fitStep = createFitStep();
+
+// The question goes to the worker, which holds the key and the network. Nothing is asked of a stopped run or under a
+// captcha: the wait is the same door every pause of the bot goes through. A worker restarted by the browser
+// mid-request, or one that never answers, is a failure to try again with the next card, not a verdict.
+async function askClassifier(card) {
+  if (!(await sleepUnlessStopped(0))) return { success: false, kind: 'skipped', error: 'the run was stopped' };
+
+  const { responseLink, cardEl, ...vacancy } = card; // elements can't travel in a message
+  try {
+    return await chrome.runtime.sendMessage({ type: 'HHAA_RATE_VACANCY', payload: vacancy });
+  } catch (error) {
+    if (isContextInvalidatedError(error)) throw error;
+    return { success: false, kind: 'transient', error: error.message };
+  }
+}
+
+function unavailableMessage({ reason, error }) {
+  const advice = 'Проверьте ключ и баланс OpenRouter или выключите отбор в настройках.';
+  return reason === UnavailableReason.UNRESPONSIVE
+    ? `Сервис отбора по Jev не отвечает (${MAX_FAILURES_IN_A_ROW} неудач подряд): ${error}. ${advice}`
+    : `Отбор по Jev недоступен: ${error}. ${advice}`;
+}
+
+// Whether the bot responds to a card the free rules let through, by the classifier. What the answer has to leave
+// behind is written here: its price, a rejection in the blacklist, a trace of the request. A card that is not
+// responded to is passed over on this page (it is marked processed by the caller).
+async function fitAllows(card, fit) {
+  const verdict = await fitStep({ card, ...fit, ask: askClassifier });
+
+  if (verdict.action === FitAction.STOPPED) throw new RunStoppedError();
+  if (verdict.action === FitAction.UNAVAILABLE) throw new Error(unavailableMessage(verdict));
+
+  const { vacancyId, title } = card;
+  if (verdict.action === FitAction.UNRATED) {
+    const { reason, error = '' } = verdict;
+    await trace('card not rated, passed over on this page', `vacancyId=${vacancyId} reason=${reason} error="${error}"`);
+    return false;
+  }
+
+  if (verdict.known) {
+    if (verdict.action === FitAction.SKIP) {
+      await trace('skipping card: the classifier rejected it before', `vacancyId=${vacancyId} title="${title}"`);
+    }
+    return verdict.action === FitAction.RESPOND;
+  }
+
+  const { probability, cost, ms, entry } = verdict;
+  const { company } = card;
+  await addFitSpend(cost);
+  if (entry) await addBlacklistEntry(entry);
+  await trace(
+    FIT_RATED_TRACE,
+    `vacancyId=${vacancyId} title="${title}" probability=${probability} verdict=${verdict.action} cost=${cost} ms=${ms}`,
+    { vacancyId, title, company, probability, verdict: verdict.action, cost, ms },
+  );
+  return verdict.action === FitAction.RESPOND;
+}
+
+// what the classifier step looks at, or null while the classifier is off: then the blacklist's rejections are not
+// even read, and the vacancies it once rejected are free to be responded to
+function fitSetupOf(settings, blacklist) {
+  if (!settings.fitEnabled) return null;
+  const fingerprint = fitFingerprint(settings.fitPrompt);
+  return { fingerprint, threshold: Number(settings.fitThreshold), rejections: fitRejections(blacklist, fingerprint) };
+}
+
 async function pickNextCard(runState, settings) {
   const cards = Array.from(document.querySelectorAll(VACANCY_CARD_SELECTOR));
-  const blacklistIds = new Set((await getQuestionnaireBlacklist()).map((e) => e.vacancyId));
-  const companyLines = normalizeWordGroups(settings.blacklistCompaniesRaw);
-  const titleStopWordLines = normalizeWordGroups(settings.vacancyTitleStopWordsRaw);
-  const processed = new Set(runState.processedVacancyIds || []);
-  const initialSize = processed.size;
+  const blacklist = await getBlacklist();
+  const rules = {
+    processed: new Set(runState.processedVacancyIds || []),
+    blockedIds: blockedIds(blacklist),
+    companyLines: normalizeWordGroups(settings.blacklistCompaniesRaw),
+    titleStopWordLines: normalizeWordGroups(settings.vacancyTitleStopWordsRaw),
+  };
+  const fit = fitSetupOf(settings, blacklist);
+  const initialSize = rules.processed.size;
   let picked = null;
 
   for (const cardEl of cards) {
     const card = readCard(cardEl);
-    if (!card || processed.has(card.vacancyId)) continue;
+    if (!card) continue;
 
-    if (blacklistIds.has(card.vacancyId)) {
-      processed.add(card.vacancyId);
-      await trace(
-        'skipping card: already in questionnaire blacklist',
-        `vacancyId=${card.vacancyId} title="${card.title}"`,
-      );
+    const reason = skipReasonOf(card, rules);
+    if (reason === SkipReason.PROCESSED) continue;
+    if (reason) {
+      rules.processed.add(card.vacancyId);
+      await recordSkip(card, reason);
       continue;
     }
 
-    if (matchesWordGroups(card.company, companyLines)) {
-      processed.add(card.vacancyId);
-      await addResponseLogEntry({
-        at: Date.now(),
-        vacancyId: card.vacancyId,
-        title: card.title,
-        company: card.company,
-        result: 'skipped_company',
-      });
-      continue;
-    }
-
-    if (matchesWordGroups(card.title, titleStopWordLines)) {
-      processed.add(card.vacancyId);
-      await addResponseLogEntry({
-        at: Date.now(),
-        vacancyId: card.vacancyId,
-        title: card.title,
-        company: card.company,
-        result: 'skipped_title_stop_word',
-      });
+    if (fit && !(await fitAllows(card, fit))) {
+      rules.processed.add(card.vacancyId);
       continue;
     }
 
@@ -147,8 +212,8 @@ async function pickNextCard(runState, settings) {
     break;
   }
 
-  if (processed.size !== initialSize) {
-    await saveRunState({ processedVacancyIds: Array.from(processed) });
+  if (rules.processed.size !== initialSize) {
+    await saveRunState({ processedVacancyIds: Array.from(rules.processed) });
   }
   return picked;
 }
@@ -235,7 +300,7 @@ async function closePopup(closeButton) {
 }
 
 async function skipModalResponse(card, reason) {
-  await addQuestionnaireBlacklistEntry({
+  await addBlacklistEntry({
     vacancyId: card.vacancyId,
     title: card.title,
     company: card.company,

@@ -11,6 +11,7 @@ import {
   getDiagnosticLog,
   getNavigationLog,
   getRespondedTodayCount,
+  getBlacklist,
   DIAGNOSTIC_RETENTION_MS,
 } from '../lib/storage.js';
 import { getCaptchaPictures, deleteCaptchaPictures } from '../lib/captcha-store.js';
@@ -18,6 +19,10 @@ import { getUploadStatus, getRejectedArchive } from '../lib/upload-store.js';
 import { createZip } from '../lib/zip.js';
 import { resultMeta, formatTime } from './format.js';
 import { reportError } from '../lib/diagnostics.js';
+import { formatRubles } from '../lib/money.js';
+import { fitSetupProblem } from '../lib/vacancy-fit.js';
+import { FIT_RATED_TRACE, FitAction } from '../lib/fit-step.js';
+import { isFitRejection } from '../lib/blacklist-core.js';
 import { classifyUrl } from '../lib/hh-pages.js';
 import { getActiveTab, onActiveTabChange } from './active-tab.js';
 import { checkListPage, probeTabPage } from './list-page.js';
@@ -115,8 +120,23 @@ async function buildFeed() {
       warn: true,
     }));
 
-  return [...responseItems, ...diagnosticItems].sort((a, b) => b.at - a.at).slice(0, 36);
+  // what the classifier made of each vacancy it was asked about: a tick for one that suits, a cross for one that
+  // doesn't — the one trace that is shown here, to see at a glance that the classifier is at work
+  const fitItems = diagnosticLog
+    .filter((entry) => entry.message === FIT_RATED_TRACE && entry.data)
+    .map(({ at, data }) => {
+      const fits = data.verdict === FitAction.RESPOND;
+      const vacancy = `${data.company || 'компания не указана'} — ${data.title || 'вакансия'}`;
+      const result = `${Math.round(data.probability * 100)}% — ${fits ? 'пройдено' : 'отклонено'}`;
+      const text = `Отбор по Jev: ${vacancy}: ${result}`;
+      return { at, icon: fits ? '✅' : '❌', text, warn: false, vacancyId: data.vacancyId };
+    });
+
+  return [...responseItems, ...diagnosticItems, ...fitItems].sort((a, b) => b.at - a.at).slice(0, 36);
 }
+
+// the feed is markup, and its texts are vacancies' and companies' own words
+const escapeHtml = (text) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 function renderFeed(items) {
   if (items.length === 0) {
@@ -130,7 +150,7 @@ function renderFeed(items) {
         <li class="event-item ${item.warn ? 'warn' : ''}">
           <span class="icon">${item.icon}</span>
           <span class="time">${formatTime(item.at)}</span>
-          <span>${item.text}</span>
+          <span>${escapeHtml(item.text)}</span>
           ${
             item.vacancyId
               ? `<a class="event-link"
@@ -144,6 +164,12 @@ function renderFeed(items) {
       `,
     )
     .join('');
+}
+
+// what the classifier has turned away since the run began: its rejections made after that
+async function countRejectedByFitSince(startedAtMs) {
+  const list = await getBlacklist();
+  return list.filter((entry) => isFitRejection(entry) && entry.at >= startedAtMs).length;
 }
 
 async function render() {
@@ -174,7 +200,13 @@ async function render() {
     els.statusError.hidden = true;
   }
 
-  const stopMessage = runState.status === 'stopped' ? STOP_MESSAGES[runState.stopReason] : null;
+  const fitProblem = fitSetupProblem(settings);
+  const rejectedByFit = settings.fitEnabled ? await countRejectedByFitSince(runState.startedAt ?? Infinity) : 0;
+
+  let stopMessage = runState.status === 'stopped' ? STOP_MESSAGES[runState.stopReason] : null;
+  if (stopMessage && runState.stopReason === StopReason.NO_MORE_VACANCIES && rejectedByFit > 0) {
+    stopMessage += ` Отбором отклонено: ${rejectedByFit}.`;
+  }
   els.statusNote.hidden = !stopMessage;
   if (stopMessage) els.statusNote.textContent = stopMessage;
 
@@ -189,14 +221,20 @@ async function render() {
 
   const isRunning = runState.status === 'running';
   els.startBtn.hidden = isRunning;
-  els.startBtn.disabled = !startGuard.ok;
+  els.startBtn.disabled = !startGuard.ok || Boolean(fitProblem);
   els.stopBtn.hidden = !isRunning;
+
+  els.fitLine.hidden = !(settings.fitEnabled && isRunning);
+  els.fitLine.textContent = `Отбор: отклонено ${rejectedByFit}`;
 
   const llmHint =
     !settings.llmEnabled || !settings.apiKey?.trim()
-      ? 'LLM выключен или не задан ключ — анкеты будут пропускаться и уходить в анкетный чёрный список.'
+      ? 'LLM выключен или не задан ключ — анкеты будут пропускаться и уходить в чёрный список.'
       : '';
-  els.startHint.textContent = [isRunning ? '' : startGuard.reason, llmHint].filter(Boolean).join(' ');
+  const fitPercent = Math.round(settings.fitThreshold * 100);
+  const fitReady = settings.fitEnabled && !isRunning ? `Отбор по Jev включён, порог ${fitPercent}%.` : '';
+  const fitHint = fitProblem || fitReady;
+  els.startHint.textContent = [isRunning ? '' : startGuard.reason, fitHint, llmHint].filter(Boolean).join(' ');
 
   const isAssisted = settings.mode === 'assisted';
   els.modeAutoBtn.classList.toggle('active', !isAssisted);
@@ -220,6 +258,12 @@ async function handleStart() {
   const guard = await checkListPage(tab);
   if (!guard.ok) {
     startGuard = guard;
+    await render();
+    return;
+  }
+
+  // the classifier can't be asked without its key and prompt — the button is disabled for that, this is the click's own check
+  if (fitSetupProblem(await getSettings())) {
     await render();
     return;
   }
@@ -320,7 +364,7 @@ function captchaDiagnosis(entries) {
   if (answers.length > 0 || handedOver.length > 0) {
     lines.push(
       `Автоответчик: вызовов модели ${answers.length} (${results || 'нет'}), в среднем ${averageS} с, ` +
-        `потрачено $${sum(numbersOf(answers, 'cost')).toFixed(5)}. Отправлено ответов ${of('captcha answer submitted').length}: ` +
+        `потрачено ${formatRubles(sum(numbersOf(answers, 'cost')))}. Отправлено ответов ${of('captcha answer submitted').length}: ` +
         `принято hh.ru ${accepted}, отклонено ${rejected} (по «captcha answer accepted/rejected»). ` +
         `Брошенных попыток: ${of('captcha attempt abandoned').length}. ` +
         `Передано человеку: ${handedOver.length}${reasons ? ` — причины: ${reasons}` : ''}.`,
@@ -358,6 +402,26 @@ function captchaDiagnosis(entries) {
   }
 
   return lines;
+}
+
+// How the classifier went in a run, counted from the trace its step writes (see fitAllows in vacancy-list.js): an
+// entry for every vacancy it asked about, one for each card it could not rate and one for each card it passed over
+// on an earlier rejection. The vacancies themselves are in `diagnostics`, one entry each.
+function fitDiagnosis(entries) {
+  const of = (message) => entries.filter((entry) => entry.message === message);
+  const rated = of(FIT_RATED_TRACE);
+  const unrated = of('card not rated, passed over on this page');
+  const known = of('skipping card: the classifier rejected it before');
+  if (rated.length + unrated.length + known.length === 0) return [];
+
+  const rejected = rated.filter((entry) => entry.data?.verdict === 'skip').length;
+  const cost = rated.reduce((total, entry) => total + (entry.data?.cost ?? 0), 0);
+  return [
+    `Отбор по Jev: запросов ${rated.length} (отклонено ${rejected}, подходят ${rated.length - rejected}), ` +
+      `пропущено по прежнему отказу без запроса ${known.length}, без оценки ${unrated.length}, ` +
+      `потрачено ${formatRubles(cost)}. Каждая оценка — запись "card rated by the classifier" (поля data: ` +
+      'vacancyId, probability, verdict, cost, ms), каждая неудача — "card not rated, passed over on this page".',
+  ];
 }
 
 // plain-language read of "is this run stuck, and why" — cross-referencing runState against the
@@ -442,7 +506,8 @@ function buildDiagnosis(runState, activeTab, navigationLog, diagnosticLog) {
     );
   }
 
-  lines.push(...captchaDiagnosis(diagnosticLog.filter((entry) => entry.at >= runState.startedAt)));
+  const thisRun = diagnosticLog.filter((entry) => entry.at >= runState.startedAt);
+  lines.push(...captchaDiagnosis(thisRun), ...fitDiagnosis(thisRun));
 
   if (lines.length === 0) {
     lines.push('Явных признаков зависания не найдено по имеющимся данным (статус/URL вкладки согласованы).');
@@ -643,6 +708,7 @@ export function initRunView() {
     statusError: document.getElementById('statusError'),
     statusNote: document.getElementById('statusNote'),
     dailyCounter: document.getElementById('dailyCounter'),
+    fitLine: document.getElementById('fitLine'),
     currentVacancy: document.getElementById('currentVacancy'),
     startBtn: document.getElementById('startBtn'),
     stopBtn: document.getElementById('stopBtn'),

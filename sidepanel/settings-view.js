@@ -1,14 +1,16 @@
 import {
   getSettings,
   saveSettings,
-  getQuestionnaireBlacklist,
-  clearQuestionnaireBlacklist,
+  getBlacklist,
+  clearBlacklist,
   exportFullState,
   importFullState,
 } from '../lib/storage.js';
 import { reportError, stackOf } from '../lib/diagnostics.js';
 import { DEFAULT_CAPTCHA_MODEL } from '../lib/captcha-solver.js';
 import { runSolverSelfTest } from '../lib/captcha-selftest.js';
+import { formatRubles } from '../lib/money.js';
+import { isFitRejection } from '../lib/blacklist-core.js';
 
 const FIELD_MAP = [
   { id: 'llmEnabled', key: 'llmEnabled', kind: 'checkbox' },
@@ -30,11 +32,18 @@ const FIELD_MAP = [
   { id: 'chatQuickMessages', key: 'chatQuickMessagesRaw', kind: 'text' },
   { id: 'chatSuggestedReplies', key: 'chatSuggestedRepliesRaw', kind: 'text' },
   { id: 'chatLlmPrompt', key: 'chatLlmPromptRaw', kind: 'text' },
+  { id: 'fitEnabled', key: 'fitEnabled', kind: 'checkbox' },
+  { id: 'fitPrompt', key: 'fitPrompt', kind: 'text' },
+  { id: 'fitThreshold', key: 'fitThreshold', kind: 'percent' }, // stored as a share of 1, shown in percent
 ];
 
 async function renderBlacklistCount() {
-  const list = await getQuestionnaireBlacklist();
-  document.getElementById('questionnaireBlacklistCount').textContent = String(list.length);
+  const list = await getBlacklist();
+  const rejections = list.filter(isFitRejection).length;
+  document.getElementById('blacklistCount').textContent = String(list.length);
+  document.getElementById('blacklistBreakdown').textContent =
+    'Вакансии, на которые бот не откликается: анкеты и попапы, которые он не прошёл, ручные пропуски' +
+    ` и отказы отбора по Jev (сейчас ). «Сбросить» очищает весь список.`;
 }
 
 // a file this large can't be a real export (chrome.storage.local's own quota is far smaller) —
@@ -154,7 +163,7 @@ function describeSolverTest(result) {
   }
 
   const seconds = (result.ms / 1000).toFixed(1);
-  const price = result.cost === null ? 'стоимость не указана' : `$${result.cost.toFixed(5)}`;
+  const price = result.cost === null ? 'стоимость не указана' : formatRubles(result.cost);
   if (result.matched) {
     return { text: `Работает: ${result.model} прочитала «${result.answer}» за ${seconds} с, ${price}.`, kind: 'success' };
   }
@@ -208,12 +217,20 @@ export async function initSettingsView() {
     const el = document.getElementById(id);
     if (kind === 'checkbox') {
       el.checked = Boolean(settings[key]);
+    } else if (kind === 'percent') {
+      el.value = String(Math.round(settings[key] * 100));
     } else {
       el.value = settings[key] ?? '';
     }
 
     const eventName = kind === 'checkbox' ? 'change' : 'input';
     el.addEventListener(eventName, () => {
+      if (kind === 'percent') {
+        // an empty or out-of-range field is a person in the middle of typing, not a threshold
+        const percent = Number(el.value);
+        if (el.value.trim() !== '' && percent >= 0 && percent <= 100) saveSettings({ [key]: percent / 100 });
+        return;
+      }
       const value = kind === 'checkbox' ? el.checked : kind === 'number' ? Number(el.value) : el.value;
       saveSettings({ [key]: value });
     });
@@ -223,16 +240,18 @@ export async function initSettingsView() {
 
   const llmEnabledEl = document.getElementById('llmEnabled');
   const captchaSolveEnabledEl = document.getElementById('captchaSolveEnabled');
+  const fitEnabledEl = document.getElementById('fitEnabled');
   const apiKeyEl = document.getElementById('apiKey');
   const syncLlmEnabledAvailability = () => {
     llmEnabledEl.disabled = !apiKeyEl.value.trim();
     captchaSolveEnabledEl.disabled = !apiKeyEl.value.trim();
+    fitEnabledEl.disabled = !apiKeyEl.value.trim();
   };
   apiKeyEl.addEventListener('input', syncLlmEnabledAvailability);
   syncLlmEnabledAvailability();
 
   document.getElementById('resetBlacklistBtn').addEventListener('click', async () => {
-    await clearQuestionnaireBlacklist();
+    await clearBlacklist();
     await renderBlacklistCount();
   });
 
