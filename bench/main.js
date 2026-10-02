@@ -6,7 +6,8 @@ import { findListTab, readCards, viewOf } from './source.js';
 import { loadBench, saveBench } from './store.js';
 import { judgeWithRetries, runWithConcurrency } from './runner.js';
 import { buildExport } from './export.js';
-import { el, renderRows, renderStats, renderToolbar } from './view.js';
+import { el } from '../lib/page-parts.js';
+import { renderRows, renderStats, renderToolbar } from './view.js';
 
 installUncaughtErrorCapture('bench');
 

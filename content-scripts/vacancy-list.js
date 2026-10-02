@@ -5,6 +5,7 @@ import {
   getBlacklist,
   addBlacklistEntry,
   addFitSpend,
+  addFitHistoryEntry,
   addResponseLogEntry,
   addTraceEntry,
   getRespondedTodayCount,
@@ -21,6 +22,7 @@ import {
   UnavailableReason,
   createFitStep,
 } from '../lib/fit-step.js';
+import { fitHistoryEntry } from '../lib/fit-history.js';
 import { fitFingerprint } from '../lib/vacancy-fit.js';
 import { readVacancyCard, vacancyIdOf } from '../lib/vacancy-card.js';
 import { randomDelayMs, reactionDelayMs } from '../lib/pacing.js';
@@ -136,8 +138,8 @@ function unavailableMessage({ reason, error }) {
 }
 
 // Whether the bot responds to a card the free rules let through, by the classifier. What the answer has to leave
-// behind is written here: its price, a rejection in the blacklist, a trace of the request. A card that is not
-// responded to is passed over on this page (it is marked processed by the caller).
+// behind is written here: its price, an entry of the history, a rejection in the blacklist, a trace of the request.
+// A card that is not responded to is passed over on this page (it is marked processed by the caller).
 async function fitAllows(card, fit) {
   const verdict = await fitStep({ card, ...fit, ask: askClassifier });
 
@@ -161,6 +163,9 @@ async function fitAllows(card, fit) {
   const { probability, cost, ms, entry } = verdict;
   const { company } = card;
   await addFitSpend(cost);
+  await addFitHistoryEntry(
+    fitHistoryEntry({ card, probability, threshold: fit.threshold, cost, ms, now: Date.now() }),
+  );
   if (entry) await addBlacklistEntry(entry);
   await trace(
     FIT_RATED_TRACE,

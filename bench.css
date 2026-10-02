@@ -683,7 +683,9 @@ body {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 8px;
-  margin-top: 10px;
+  /* pressed to the bottom with the fold under it: in a row of cards the answers sit level, whatever the head holds */
+  margin-top: auto;
+  padding-top: 10px;
 }
 
 /* the percentage and the verdict side by side, the bar under them */
@@ -787,7 +789,6 @@ body {
 }
 
 .sent-details {
-  margin-top: auto;
   padding-top: 8px;
 }
 

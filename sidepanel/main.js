@@ -3,7 +3,7 @@ import { initAnalyticsView, renderAnalyticsView } from './analytics-view.js';
 import { initSettingsView } from './settings-view.js';
 import { initUploadView } from './upload-view.js';
 import { initSearchesView } from './searches-view.js';
-import { initBenchLink } from './bench-link.js';
+import { initBenchLink, initHistoryLink } from './tool-pages.js';
 import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
 
 installUncaughtErrorCapture('sidepanel');
@@ -42,3 +42,4 @@ initAnalyticsView();
 initSettingsView();
 initUploadView();
 initBenchLink();
+initHistoryLink();

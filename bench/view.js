@@ -1,5 +1,6 @@
 import { formatRubles } from '../lib/money.js';
-import { isFit, buildVacancyState } from '../lib/vacancy-fit.js';
+import { buildVacancyState } from '../lib/vacancy-fit.js';
+import { chip, el, ms, probabilityCell, stateList } from '../lib/page-parts.js';
 import {
   hasError,
   histogram,
@@ -10,43 +11,9 @@ import {
   vacancyVerdict,
 } from './stats.js';
 
-// Everything on the page that comes from the outside — vacancy texts, error bodies — is put in as text, never
-// as markup: `el` builds nodes, it does not parse HTML.
-export function el(tag, props = {}, ...children) {
-  const node = document.createElement(tag);
-  for (const [name, value] of Object.entries(props)) {
-    if (value == null || value === false) continue;
-    if (name === 'class') node.className = value;
-    else if (name === 'vars') for (const [key, val] of Object.entries(value)) node.style.setProperty(key, val);
-    else if (name.startsWith('on')) node.addEventListener(name.slice(2), value);
-    else node.setAttribute(name, value === true ? '' : value);
-  }
-  node.append(...children.flat().filter((child) => child != null && child !== false));
-  return node;
-}
-
 const VERDICT_NAME = { accept: 'подходит', reject: 'не подходит', mixed: 'спорная', none: 'без оценки' };
 
-const pct = (probability) => `${Math.round(probability * 100)}%`;
-const ms = (value) => `${Math.round(value)} мс`;
-const chip = (text, modifier = '') => el('span', { class: `chip ${modifier}`.trim() }, text);
-
-// ---- the probability bar: filled to the probability, a tick at the threshold, green or red by which side -----
-
-function probabilityBar(probability, threshold) {
-  return el(
-    'div',
-    {
-      class: `pbar ${isFit(probability, threshold) ? 'pbar_ok' : 'pbar_no'}`,
-      vars: { '--p': `${probability * 100}%`, '--t': `${threshold * 100}%` },
-      title: `${(probability * 100).toFixed(1)}%`,
-    },
-    el('div', { class: 'pbar-fill' }),
-    el('div', { class: 'pbar-tick' }),
-  );
-}
-
-// one answer: the percentage first, then what it means at this threshold, then the bar
+// the answer to one prompt of a vacancy, or why there is none
 function answerCell(record, promptKey, ctx, multiplePrompts) {
   const title = multiplePrompts
     ? el('div', { class: 'cell-prompt', title: ctx.prompts[promptKey] }, `Промпт ${promptKey}`)
@@ -54,27 +21,15 @@ function answerCell(record, promptKey, ctx, multiplePrompts) {
   if (!record) return el('div', { class: 'cell cell_empty' }, title, '—');
   if (!record.ok) return el('div', { class: 'cell cell_error', title: record.error }, title, '⚠ ошибка запроса');
 
-  const probability = record.probabilities[promptKey];
-  const fit = isFit(probability, ctx.threshold);
-  return el(
-    'div',
-    { class: `cell ${fit ? 'cell_ok' : 'cell_no'}` },
+  return probabilityCell(
+    record.probabilities[promptKey],
+    ctx.threshold,
+    { yes: 'подходит', no: 'не подходит' },
     title,
-    el('div', { class: 'cell-pct' }, pct(probability)),
-    el('div', { class: 'cell-verdict' }, fit ? 'подходит' : 'не подходит'),
-    probabilityBar(probability, ctx.threshold),
   );
 }
 
 // ---- a vacancy ---------------------------------------------------------------------------------------------
-
-function stateList(state) {
-  return el(
-    'dl',
-    { class: 'state' },
-    Object.entries(state).flatMap(([key, value]) => [el('dt', {}, key), el('dd', {}, value)]),
-  );
-}
 
 // exactly what went (or, before a run, will go) to the model, and what the answer cost
 function sentDetails(vacancy, ctx) {

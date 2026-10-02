@@ -17,6 +17,7 @@ zip -r "$ZIP_PATH" . \
   -x "data/*" \
   -x "captcha-bench/*" \
   -x "*.test.mjs" \
+  -x "*fake-dom.mjs" \
   -x ".git/*" \
   -x "*.DS_Store"
 
