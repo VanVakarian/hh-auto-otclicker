@@ -35,7 +35,7 @@ import {
   haltOnContextInvalidated,
   onContextInvalidated,
 } from '../lib/extension-context.js';
-import { VACANCY_CARD_SELECTOR, NEXT_PAGE_SELECTOR, PAGER_SELECTOR } from '../lib/hh-pages.js';
+import { VACANCY_CARD_SELECTOR, PAGER_SELECTOR, findNextPageLink } from '../lib/hh-pages.js';
 
 const RESPONSE_BUTTON_SELECTOR = '[data-qa="vacancy-serp__vacancy_response"]';
 
@@ -464,7 +464,8 @@ function describePage(processedCount) {
     .slice(0, PAGER_DUMP_LIMIT)
     .map((el) => {
       const page = el.href ? `>page=${pageParamOf(el.href)}` : '';
-      return `${el.getAttribute('data-qa')}${page}"${el.textContent.trim().slice(0, 12)}"`;
+      const current = el.getAttribute('aria-current') === 'true' ? '*' : '';
+      return `${el.getAttribute('data-qa')}${page}${current}"${el.textContent.trim().slice(0, 12)}"`;
     });
   const pageLinks = new Set(Array.from(document.querySelectorAll('a[href*="page="]')).map((a) => pageParamOf(a.href)));
   const { scrollY, innerHeight } = window;
@@ -480,7 +481,7 @@ function describePage(processedCount) {
 // Visits the end of the page and waits there for whatever hh.ru still has to render — the next-page
 // link or more vacancies — so the caller judges a finished page, not a half-drawn one.
 async function waitForPageEnd(cardsBefore) {
-  const hasNextPageLink = () => Boolean(document.querySelector(NEXT_PAGE_SELECTOR));
+  const hasNextPageLink = () => Boolean(findNextPageLink());
   const hasMoved = () => hasNextPageLink() || countCards() > cardsBefore;
   if (hasMoved()) return;
 
@@ -549,7 +550,7 @@ async function processNextCard() {
     const currentRunState = await getRunState();
     if (currentRunState.status !== 'running') return;
 
-    const nextPageLink = document.querySelector(NEXT_PAGE_SELECTOR);
+    const nextPageLink = findNextPageLink();
     if (!nextPageLink) {
       console.log('📋 [list] no more vacancies and no next page, stopping');
       await trace(
