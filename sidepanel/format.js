@@ -23,6 +23,11 @@ export function formatTime(ts) {
   return new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
+// day, month and time: for a moment that can be from any day
+export function formatMoment(ts) {
+  return new Date(ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
 export function formatDateShort(ts) {
   return new Date(ts).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
 }

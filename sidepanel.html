@@ -14,6 +14,9 @@
   <header class="masthead">
     <span class="masthead-badge">HH</span>
     <span class="masthead-title">Auto Otclicker</span>
+    <span class="upload-indicator"
+          id="uploadIndicator"
+          hidden></span>
   </header>
 
   <nav class="tabs">
@@ -379,6 +382,35 @@
            hidden></div>
     </div>
 
+    <div class="card">
+      <h2 class="card-title">Отправка диагностики</h2>
+      <div class="form-group">
+        <label for="uploadKey"
+               class="form-label">Ключ отправки</label>
+        <input type="password"
+               id="uploadKey"
+               class="form-input"
+               placeholder="Ключ от владельца сервера">
+        <div class="hint">Пока ключ введён, журналы работы уходят на сервер владельца раз в 5 минут: вакансии, ответы
+          анкет, id резюме, картинки капч. Ключ не отправляется никуда, кроме этого сервера. Пусто — ничего не
+          отправляется.</div>
+      </div>
+      <div class="data-transfer-status"
+           id="uploadStatus"
+           hidden></div>
+      <button type="button"
+              id="uploadNowBtn"
+              class="submit-btn submit-btn_secondary">Отправить сейчас</button>
+      <div class="counter-row upload-archive-row">
+        <span class="counter-label">Не принято сервером (локальный архив)</span>
+        <span class="counter-value"
+              id="rejectedArchiveCount">0</span>
+      </div>
+      <button type="button"
+              id="clearRejectedBtn"
+              class="submit-btn submit-btn_secondary">Очистить архив</button>
+    </div>
+
     <div class="card tools-card">
       <h2 class="card-title">Диагностика и отладка</h2>
       <button type="button"
@@ -388,7 +420,7 @@
       <button type="button"
               id="downloadCaptchasBtn"
               class="submit-btn submit-btn_secondary">Скачать капчи</button>
-      <div class="hint">ZIP с картинками всех сохранённых капч. После скачивания они удаляются из архива расширения.</div>
+      <div class="hint">ZIP с картинками всех сохранённых капч. После скачивания они удаляются из архива расширения; те, что ещё не дошли до сервера, остаются до доставки.</div>
       <button type="button"
               id="openBenchBtn"
               class="submit-btn submit-btn_secondary">Бенчмарк «подходит ли вакансия»</button>

@@ -1,6 +1,7 @@
 import { initRunView, renderRunView } from './run-view.js';
 import { initAnalyticsView, renderAnalyticsView } from './analytics-view.js';
 import { initSettingsView } from './settings-view.js';
+import { initUploadView } from './upload-view.js';
 import { initSearchesView } from './searches-view.js';
 import { initBenchLink } from './bench-link.js';
 import { installUncaughtErrorCapture } from '../lib/diagnostics.js';
@@ -39,4 +40,5 @@ initRunView();
 initSearchesView();
 initAnalyticsView();
 initSettingsView();
+initUploadView();
 initBenchLink();

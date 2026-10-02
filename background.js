@@ -14,6 +14,7 @@ import {
 } from './lib/storage.js';
 import { reportError, reportWarning, stackOf, installUncaughtErrorCapture } from './lib/diagnostics.js';
 import { addCaptchaPicture } from './lib/captcha-store.js';
+import { uploadNow } from './lib/uploader.js';
 import { reactionDelayMs } from './lib/pacing.js';
 import {
   LIST_URL_PATTERN,
@@ -25,11 +26,50 @@ import {
 
 installUncaughtErrorCapture('background');
 
-chrome.runtime.onStartup.addListener(() => maintainJournals());
+// ---- sending diagnostics to the server (lib/uploader.js) -------------------------------------
+// A timer of the worker dies with the worker's sleep, an alarm wakes it: the cycle runs from the alarm
+// every UPLOAD_PERIOD_MINUTES, once at the start of the browser and after an install or update, when a key
+// is entered, when a run stops (its tail goes out at once), and on the panel's request. A worker waking up
+// for any other reason starts nothing — it only makes sure the alarm exists.
+const UPLOAD_ALARM = 'hhaa-upload';
+const UPLOAD_PERIOD_MINUTES = 5;
+const KEY_ENTERED_DEBOUNCE_MS = 1500; // the key is typed into the panel, every character is a settings change
+
+async function ensureUploadAlarm() {
+  if (await chrome.alarms.get(UPLOAD_ALARM)) return;
+  chrome.alarms.create(UPLOAD_ALARM, { periodInMinutes: UPLOAD_PERIOD_MINUTES });
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === UPLOAD_ALARM) uploadNow();
+});
+ensureUploadAlarm();
+
+let keyEnteredTimer = null;
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local') return;
+
+  const newKey = changes[KEYS.SETTINGS]?.newValue?.uploadKey;
+  if (newKey?.trim() && newKey !== changes[KEYS.SETTINGS].oldValue?.uploadKey) {
+    clearTimeout(keyEnteredTimer);
+    keyEnteredTimer = setTimeout(uploadNow, KEY_ENTERED_DEBOUNCE_MS);
+  }
+
+  const runState = changes[KEYS.RUN_STATE];
+  if (runState?.oldValue?.status === 'running' && runState.newValue?.status !== 'running') uploadNow();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  maintainJournals();
+  uploadNow();
+});
 
 chrome.runtime.onInstalled.addListener(async () => {
   // an update can bring a new storage layout — the journals are brought to it right away
   maintainJournals();
+  ensureUploadAlarm();
+  uploadNow();
   console.log('🧠 [background] installed, enabling side panel on action click');
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 });
@@ -251,12 +291,18 @@ async function injectModule(tabId, file) {
 // injected or null) — this is the ground truth for diagnosing a run that goes silent: a run state
 // stuck on "running" with a URL that matched neither pattern here means the tab landed somewhere
 // content-scripts/*.js was never even asked to run, which no amount of in-page logging can show.
+//
+// `pause` is why a running bot stood still when the navigation happened (a captcha, answered or not): a
+// page that is left under a captcha can't always write that down itself, the worker can.
 async function injectForNavigation({ tabId, url, frameId }, source) {
   if (frameId !== 0) return;
 
+  const pause = await getRunPause();
+  const base = { tabId, url, source, ...(pause.length > 0 && { pause }) };
+
   const page = PAGE_SCRIPTS.find(({ pattern }) => pattern.test(url));
   if (!page) {
-    await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: null, injectionError: null });
+    await addNavigationLogEntry({ at: Date.now(), ...base, injectedFile: null, injectionError: null });
     await recoverStrayTab(tabId, url);
     return;
   }
@@ -264,7 +310,7 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
   // the entry goes first, and each file is logged on its own
   for (const file of [page.entry, ...page.extras]) {
     const injectionError = await injectModule(tabId, file);
-    await addNavigationLogEntry({ at: Date.now(), tabId, url, source, injectedFile: file, injectionError });
+    await addNavigationLogEntry({ at: Date.now(), ...base, injectedFile: file, injectionError });
     if (injectionError) {
       await reportInjectionFailure(tabId, file, url, injectionError, { isEntry: file === page.entry });
     }
@@ -317,6 +363,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         reportError('background', `solveCaptcha threw: ${error.message}`, stackOf(error));
         sendResponse({ success: false, kind: 'transient', error: error.message });
       });
+    return true;
+  }
+
+  // the panel's "send now"; the answer is the status the cycle leaves
+  if (message.type === 'HHAA_UPLOAD_NOW') {
+    uploadNow().then(sendResponse);
     return true;
   }
 

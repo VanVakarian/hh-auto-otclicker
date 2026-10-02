@@ -16,6 +16,7 @@ const FIELD_MAP = [
   { id: 'llmModels', key: 'llmModelsRaw', kind: 'text' },
   { id: 'captchaSolveEnabled', key: 'captchaSolveEnabled', kind: 'checkbox' },
   { id: 'captchaModel', key: 'captchaModel', kind: 'text' },
+  { id: 'uploadKey', key: 'uploadKey', kind: 'text' },
   { id: 'legend', key: 'legend', kind: 'text' },
   { id: 'stylePrompt', key: 'stylePrompt', kind: 'text' },
   { id: 'dailyLimit', key: 'dailyLimit', kind: 'number' },
@@ -64,7 +65,7 @@ async function handleExportAll(button, statusEl) {
 
     setDataTransferStatus(
       statusEl,
-      `Экспортировано разделов: ${Object.keys(payload.data).length}. Файл содержит API-ключ — не передавайте его другим.`,
+      `Экспортировано разделов: ${Object.keys(payload.data).length}. Файл содержит ключи — не передавайте его другим.`,
       'success',
     );
     button.textContent = 'Экспортировано ✓';

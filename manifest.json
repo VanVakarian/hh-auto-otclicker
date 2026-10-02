@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HH Auto Otclicker",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "minimum_chrome_version": "130",
   "description": "Расширение для автоматических откликов на вакансии на HH.",
   "permissions": [
@@ -10,12 +10,14 @@
     "tabs",
     "sidePanel",
     "scripting",
-    "webNavigation"
+    "webNavigation",
+    "alarms"
   ],
   "host_permissions": [
     "https://hh.ru/*",
     "https://*.hh.ru/*",
-    "https://openrouter.ai/*"
+    "https://openrouter.ai/*",
+    "https://app.vslav.dev/*"
   ],
   "web_accessible_resources": [
     {

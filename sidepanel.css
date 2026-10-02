@@ -61,6 +61,30 @@ body {
   color: var(--text-primary);
 }
 
+.upload-indicator {
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: #f1ebeb;
+}
+
+.upload-indicator_ok {
+  color: #157a3a;
+  background: rgba(22, 163, 74, 0.1);
+}
+
+.upload-indicator_error {
+  color: #a4302b;
+  background: #fdecea;
+}
+
+.upload-archive-row {
+  margin-top: 16px;
+}
+
 .tabs {
   display: flex;
   gap: 4px;
