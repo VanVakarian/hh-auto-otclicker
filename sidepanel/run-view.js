@@ -336,7 +336,7 @@ function captchaDiagnosis(entries) {
       `Человек: начал печатать на ${typed} картинках, нажал «Отправить» ${pressed.length} раз ` +
         `(с ответом модели в поле: ${overModel}); принято hh.ru ${of('captcha person answer accepted').length}, ` +
         `отклонено ${of('captcha person answer rejected').length}. Введённый текст — в записях ` +
-        '"captcha person submitted" (поле text), картинки — на сервере по ключу key.',
+        '"captcha person submitted" (поле text), картинки — в ZIP кнопки «Скачать капчи», имя файла содержит key.',
     );
   }
 
@@ -524,22 +524,11 @@ async function downloadCompleted(url, filename) {
   }
 }
 
-// The pictures the archive may forget once they are on disk. While diagnostics are sent to the server, a
-// picture that has not reached it yet stays (it goes into the next ZIP too) — the server's copy is the
-// one analysis uses. With sending off, or with no place for pictures on the server, all of them go.
-async function deliveredPictures(pictures) {
-  const [settings, status] = await Promise.all([getSettings(), getUploadStatus()]);
-  if (!settings.uploadKey.trim() || status.notConfigured.includes('pictures')) return pictures;
-  return pictures.filter(({ at }) => at < status.picturesDeliveredBefore);
-}
-
 // Every captcha picture the watcher has saved, as one ZIP of bare PNGs (oldest first) — nothing else in
 // it. The pictures are deleted from the archive once the browser confirms the file is on disk, and only
-// the ones that went into it (and, with sending on, reached the server): a captcha that arrives
-// mid-download waits for the next zip. If the download fails or is cancelled they all stay.
+// the ones that went into it: a captcha that arrives mid-download waits for the next zip. If the
+// download fails or is cancelled they all stay.
 async function handleDownloadCaptchas() {
-  // what is not on the server yet is sent first, so that it can leave the archive with this ZIP
-  await chrome.runtime.sendMessage({ type: 'HHAA_UPLOAD_NOW' }).catch(() => {});
   const pictures = await getCaptchaPictures();
   if (pictures.length === 0) {
     flashLabel(els.downloadCaptchasBtn, 'Капч пока нет');
@@ -569,10 +558,8 @@ async function handleDownloadCaptchas() {
     URL.revokeObjectURL(url);
   }
 
-  const forgettable = await deliveredPictures(pictures);
-  await deleteCaptchaPictures(forgettable.map(({ key }) => key));
-  const kept = pictures.length - forgettable.length;
-  flashLabel(els.downloadCaptchasBtn, `Скачано: ${pictures.length} ✓${kept > 0 ? `, до сервера не дошли: ${kept}` : ''}`);
+  await deleteCaptchaPictures(pictures.map(({ key }) => key));
+  flashLabel(els.downloadCaptchasBtn, `Скачано: ${pictures.length} ✓`);
 }
 
 // strips whitespace AND leading/trailing punctuation together (a stray ", " or "." grabbed by an

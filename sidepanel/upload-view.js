@@ -36,9 +36,6 @@ export function describeUpload({ keySet, status }) {
     `Ожидает отправки: ${status.pending}.`,
   ];
   if (status.volume) facts.push(`Сегодня отправлено: ${formatMegabytes(status.volume.bytes)}.`);
-  if (status.notConfigured.includes('pictures')) {
-    facts.push('Картинки капч не отправляются: на сервере для них нет источника.');
-  }
 
   if (status.error) {
     const problem = PROBLEM_TEXTS[status.error.kind] ?? `Ошибка: ${status.error.kind}.`;
