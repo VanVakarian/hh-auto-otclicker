@@ -270,7 +270,13 @@ async function handleStart() {
 
   await startRun({ tabId: tab.id, listUrl: tab.url });
 
-  await chrome.tabs.reload(tab.id);
+  // No reload: the page may be minutes from "loaded" and is ready to work as it is. A script already on it
+  // starts on this message; on a page still loading there is none yet, and the one injected later finds the run.
+  try {
+    await chrome.tabs.sendMessage(tab.id, { type: 'HHAA_BEGIN_RUN' });
+  } catch {
+    // no script on the page yet
+  }
   await render();
 }
 

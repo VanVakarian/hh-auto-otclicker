@@ -260,15 +260,17 @@ async function reportInjectionFailure(tabId, file, url, injectionError, { isEntr
 
 // entries are ES modules sharing code with the rest of the extension — a content script can't be
 // one directly, so a one-line stub imports it. A module runs once per document, which is also
-// what makes the two racing injections (onCompleted + onHistoryStateUpdated) harmless.
+// what makes racing injections harmless. With a `documentId` the target is that one document, not the
+// tab: when the tab has moved on meanwhile (the grace wait below), the injection fails instead of
+// landing on another page.
 // executeScript resolves fine even when the import inside the stub rejects (blocked resource,
 // module top-level throw) — the stub has to hand the failure back as its result, otherwise
 // the run just sits on "running" with a page nobody is driving.
 // Resolves to the failure's description, or null when the module loaded.
-async function injectModule(tabId, file) {
+async function injectModule(tabId, file, documentId) {
   try {
     const [injection] = await chrome.scripting.executeScript({
-      target: { tabId },
+      target: documentId ? { tabId, documentIds: [documentId] } : { tabId },
       func: async (path) => {
         try {
           await import(chrome.runtime.getURL(path));
@@ -289,6 +291,11 @@ async function injectModule(tabId, file) {
 // reload, which static manifest content_scripts never re-run for. Inject programmatically on
 // every real and history-API navigation instead, so the right script always runs.
 //
+// A real navigation is acted on at "load" (webNavigation.onCompleted) — or, when the page hangs in
+// "loading" on one stuck request while being fully usable, LOAD_GRACE_MS after its DOM was ready
+// (onDOMContentLoaded), whichever comes first. A bot that waited for "load" alone stood still for as
+// long as the slowest tracker on the page took.
+//
 // Every one of these events is also logged to hhaa_navigationLog (source, url, which file got
 // injected or null) — this is the ground truth for diagnosing a run that goes silent: a run state
 // stuck on "running" with a URL that matched neither pattern here means the tab landed somewhere
@@ -296,8 +303,32 @@ async function injectModule(tabId, file) {
 //
 // `pause` is why a running bot stood still when the navigation happened (a captcha, answered or not): a
 // page that is left under a captcha can't always write that down itself, the worker can.
-async function injectForNavigation({ tabId, url, frameId }, source) {
-  if (frameId !== 0) return;
+const LOAD_GRACE_MS = 5000;
+
+// The URL each document was last handled for (a document is one page load; hh.ru's pushState changes
+// its URL without replacing it). Several events reach the same document — load and the grace timer for a
+// real navigation, the history update for an in-page one — and it is handled once per URL, by whichever
+// comes first. Lives only for this service worker's lifetime: a repeat after a restart is harmless, a
+// module runs once per document.
+const handledDocuments = new Map();
+const HANDLED_DOCUMENTS_LIMIT = 200;
+
+function markHandled(documentId, url) {
+  if (handledDocuments.size >= HANDLED_DOCUMENTS_LIMIT) handledDocuments.delete(handledDocuments.keys().next().value);
+  handledDocuments.set(documentId, url);
+}
+
+// the tab may have moved on, or been closed, while the injection was waiting its turn
+async function isDocumentGone(tabId, documentId) {
+  try {
+    return (await chrome.webNavigation.getFrame({ tabId, frameId: 0 }))?.documentId !== documentId;
+  } catch {
+    return true;
+  }
+}
+
+async function injectForNavigation({ tabId, url, documentId }, source) {
+  markHandled(documentId, url);
 
   const pause = await getRunPause();
   const base = { tabId, url, source, ...(pause.length > 0 && { pause }) };
@@ -311,7 +342,10 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
 
   // the entry goes first, and each file is logged on its own
   for (const file of [page.entry, ...page.extras]) {
-    const injectionError = await injectModule(tabId, file);
+    const injectionError = await injectModule(tabId, file, documentId);
+    // a document that left before its turn is not a failed injection: its successor has events of its own
+    if (injectionError && (await isDocumentGone(tabId, documentId))) return;
+
     await addNavigationLogEntry({ at: Date.now(), ...base, injectedFile: file, injectionError });
     if (injectionError) {
       await reportInjectionFailure(tabId, file, url, injectionError, { isEntry: file === page.entry });
@@ -319,13 +353,24 @@ async function injectForNavigation({ tabId, url, frameId }, source) {
   }
 }
 
+function injectOnLoad(details, source) {
+  if (details.frameId !== 0 || handledDocuments.has(details.documentId)) return;
+  return injectForNavigation(details, source);
+}
+
+function injectOnHistoryChange(details) {
+  if (details.frameId !== 0 || handledDocuments.get(details.documentId) === details.url) return;
+  return injectForNavigation(details, 'onHistoryStateUpdated');
+}
+
 const HH_RU_FILTER = { url: [{ hostEquals: 'hh.ru' }, { hostSuffix: '.hh.ru' }] };
 
-chrome.webNavigation.onCompleted.addListener((details) => injectForNavigation(details, 'onCompleted'), HH_RU_FILTER);
-chrome.webNavigation.onHistoryStateUpdated.addListener(
-  (details) => injectForNavigation(details, 'onHistoryStateUpdated'),
+chrome.webNavigation.onCompleted.addListener((details) => injectOnLoad(details, 'onCompleted'), HH_RU_FILTER);
+chrome.webNavigation.onDOMContentLoaded.addListener(
+  (details) => setTimeout(() => injectOnLoad(details, 'loadGrace'), LOAD_GRACE_MS),
   HH_RU_FILTER,
 );
+chrome.webNavigation.onHistoryStateUpdated.addListener(injectOnHistoryChange, HH_RU_FILTER);
 
 // Whatever costs money is paid for only on the tab the run drives: on a tab a person is browsing by hand, a
 // captcha is theirs to solve and a vacancy is theirs to judge. The page can't tell which tab it is, the sender can.

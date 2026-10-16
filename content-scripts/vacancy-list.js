@@ -113,7 +113,8 @@ async function recordSkip(card, reason) {
   });
 }
 
-const fitStep = createFitStep();
+// a run's own: the count of failures in a row must not carry over from a run that was stopped on this page
+let fitStep = createFitStep();
 
 // The question goes to the worker, which holds the key and the network. Nothing is asked of a stopped run or under a
 // captcha: the wait is the same door every pause of the bot goes through. A worker restarted by the browser
@@ -656,7 +657,13 @@ async function processNextCard() {
   await processNextCard();
 }
 
+// One scan per document at a time: the module's own start and the panel's "begin" can both arrive.
+let isScanning = false;
+
 async function start() {
+  if (isScanning) return;
+  isScanning = true;
+  fitStep = createFitStep();
   try {
     const runState = await getRunState();
     if (runState.status !== 'running') return;
@@ -689,8 +696,16 @@ async function start() {
     if (isRunStoppedError(error)) return;
     await reportError('list', `fatal error: ${error.message}`, `${location.href} ${stackOf(error)}`);
     await saveRunState({ status: 'error', lastError: error.message });
+  } finally {
+    isScanning = false;
   }
 }
+
+// Start in the sidepanel doesn't reload the page: the script that is already here, having found no run when it
+// loaded, is told to look again. The message goes to the run's tab only.
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type === 'HHAA_BEGIN_RUN') start();
+});
 
 onContextInvalidated(() => {
   // nothing can be written to the log from a dead context, and a warn here would sit on the Errors page
