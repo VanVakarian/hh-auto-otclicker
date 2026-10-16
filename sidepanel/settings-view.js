@@ -15,6 +15,7 @@ import { isFitRejection } from '../lib/blacklist-core.js';
 const FIELD_MAP = [
   { id: 'llmEnabled', key: 'llmEnabled', kind: 'checkbox' },
   { id: 'apiKey', key: 'apiKey', kind: 'text' },
+  { id: 'openRouterProxyUrl', key: 'openRouterProxyUrl', kind: 'text' },
   { id: 'llmModels', key: 'llmModelsRaw', kind: 'text' },
   { id: 'captchaSolveEnabled', key: 'captchaSolveEnabled', kind: 'checkbox' },
   { id: 'captchaModel', key: 'captchaModel', kind: 'text' },

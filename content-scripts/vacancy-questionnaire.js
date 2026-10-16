@@ -179,6 +179,7 @@ function requestLLMAnswers(blocks, settings) {
     type: 'HHAA_GENERATE_ANSWERS',
     payload: {
       apiKey: settings.apiKey,
+      proxyUrl: settings.openRouterProxyUrl,
       legend: settings.legend,
       userPrompt: settings.stylePrompt,
       questions: blocks.map(formatQuestionForLLM),

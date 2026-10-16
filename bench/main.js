@@ -244,7 +244,7 @@ function recordFrom(result) {
 }
 
 async function startRun() {
-  const { apiKey } = await getSettings();
+  const { apiKey, openRouterProxyUrl } = await getSettings();
   if (!apiKey?.trim()) return setNotice('Нет API-ключа OpenRouter — введите его в настройках расширения.', 'error');
 
   const run = {
@@ -267,7 +267,7 @@ async function startRun() {
   await runWithConcurrency(
     run.vacancies,
     async (card) => {
-      const result = await judgeWithRetries(judgeVacancy, { apiKey, vacancy: card, prompts: run.prompts });
+      const result = await judgeWithRetries(judgeVacancy, { apiKey, proxyUrl: openRouterProxyUrl, vacancy: card, prompts: run.prompts });
       run.results[card.vacancyId] = recordFrom(result);
       if (!result.success && result.kind === 'unavailable') {
         failure = result.error;

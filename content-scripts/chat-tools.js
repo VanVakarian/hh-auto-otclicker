@@ -390,6 +390,7 @@ async function handleLlmReplyClick(button, messageId, messageText) {
       type: 'HHAA_GENERATE_CHAT_REPLY',
       payload: {
         apiKey: settings.apiKey,
+        proxyUrl: settings.openRouterProxyUrl,
         legend: settings.legend,
         chatPrompt: settings.chatLlmPromptRaw,
         messageText,

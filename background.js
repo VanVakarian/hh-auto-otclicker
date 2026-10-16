@@ -343,8 +343,8 @@ async function solveCaptchaForRun(payload, sender) {
 // The key and the prompt are the settings' own, read here: the page sends only the card
 async function rateVacancyForRun(vacancy, sender) {
   if (!(await isTabOfRunningRun(sender))) return NOT_THE_RUN_TAB;
-  const { apiKey, fitPrompt } = await getSettings();
-  return rateVacancy({ apiKey, prompt: fitPrompt, vacancy });
+  const { apiKey, openRouterProxyUrl, fitPrompt } = await getSettings();
+  return rateVacancy({ apiKey, proxyUrl: openRouterProxyUrl, prompt: fitPrompt, vacancy });
 }
 
 // a message can't carry a Blob, so the picture arrives as a data URL and is stored as binary

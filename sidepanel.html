@@ -196,6 +196,17 @@
       </div>
 
       <div class="form-group">
+        <label for="openRouterProxyUrl"
+               class="form-label">Прокси для OpenRouter</label>
+        <input type="password"
+               id="openRouterProxyUrl"
+               class="form-input"
+               placeholder="Пусто — запросы идут прямо на openrouter.ai">
+        <div class="hint">Адрес на сервере владельца, через который идут все запросы к OpenRouter: чат-модели, капчи и
+          отбор по Jev. Адрес секретный, на домене app.vslav.dev. Пусто — запросы уходят напрямую.</div>
+      </div>
+
+      <div class="form-group">
         <label for="legend"
                class="form-label">Легенда</label>
         <textarea id="legend"
